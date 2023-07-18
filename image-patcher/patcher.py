@@ -12,6 +12,8 @@ max_width = 512
 max_height = 512
 grid_size = 8
 
+grid_thickness = 2
+
 # Define the layout
 menu_layout = [
     [sg.Button("Load Images")],
@@ -21,8 +23,8 @@ menu_layout = [
 
 screen_layout = [
     [
-        sg.Graph((max_width, max_height), (0, 0), (max_width,
-                                                   max_height), enable_events=True, key='-GRAPH-')
+        sg.Graph((max_width, max_height), (0, max_height), (max_width,
+                                                   0), enable_events=True, key='-GRAPH-')
     ],
 ]
 
@@ -39,12 +41,16 @@ layout = [
 window = sg.Window("Image Viewer", layout, size=(1000, 600))
 
 # Function to resize image
+
+
 def resize_image(filename, max_width, max_height):
     image = Image.open(filename)
     resized_image = image.resize((max_width, max_height), Image.LANCZOS)
     return np.array(resized_image)
 
 # Function to draw grid on the image
+
+
 def draw_grid(image):
     height, width, _ = image.shape
     cell_width = width // grid_size
@@ -52,12 +58,27 @@ def draw_grid(image):
 
     for i in range(1, grid_size):
         image = cv2.line(image, (i * cell_width, 0),
-                         (i * cell_width, height), (0, 0, 0), thickness=2)
+                         (i * cell_width, height), (0, 0, 0), thickness=grid_thickness)
         image = cv2.line(image, (0, i * cell_height),
-                         (width, i * cell_height), (0, 0, 0), thickness=2)
+                         (width, i * cell_height), (0, 0, 0), thickness=grid_thickness)
 
     return image
 
+
+def draw_highlight(image, highlights):
+    for (start_point, end_point) in highlights:
+        x1, y1 = start_point
+        x2, y2 = end_point
+        x, y, w, h = x1, y1, abs(x2-x1), abs(y2-y1)
+
+        sub_img = image[y+2:y+h-1, x+2:x+w-1]
+        white_rect = np.ones(sub_img.shape, dtype=np.uint8) * 255
+        res = cv2.addWeighted(sub_img, 0.2, white_rect, 0.2, 1.0)
+
+        # Putting the image back to its position
+        image[y+2:y+h-1, x+2:x+w-1] = res
+
+    return image
 
 # Event loop
 while True:
@@ -67,6 +88,7 @@ while True:
     if event == sg.WINDOW_CLOSED:
         break
     elif event == "Load Images":
+        image_highlights = []
         # Open a file dialog to select images
         filenames = sg.popup_get_file(
             "Select Images",
@@ -95,12 +117,13 @@ while True:
                 image_bytes.save(byte_io, format='PNG')
 
                 window['-GRAPH-'].draw_image(data=byte_io.getvalue(),
-                                             location=(0, max_height))
+                                             location=(0, 0))
                 current_image_index = 0
             else:
                 sg.popup_error("No valid image files selected.")
 
     elif event in ("-PREV-", "-NEXT-"):
+        image_highlights = []
         # Check if image_list is empty
         if not image_list:
             continue
@@ -124,11 +147,38 @@ while True:
         byte_io = io.BytesIO()
         image_bytes.save(byte_io, format='PNG')
 
+        window['-GRAPH-'].erase()
         window['-GRAPH-'].draw_image(data=byte_io.getvalue(),
-                                             location=(0, max_height))
+                                     location=(0, 0))
 
     elif event == '-GRAPH-':
-        sg.popup(str(values))
+        # Get the clicked cell coordinates based on the click position
+        cell_width = max_width // grid_size
+        cell_height = max_height // grid_size
+        x, y = values['-GRAPH-']
+        cell_x = x // cell_width
+        cell_y = y // cell_height
+
+        # Update the displayed image
+        resized_image = resize_image(
+            image_list[current_image_index], max_width, max_height)
+        
+        grid_image = draw_grid(resized_image)
+        # Highlight the clicked cell by drawing a rectangle
+        image_highlights.append(((cell_x * cell_width,
+                                            cell_y * cell_height),
+                                           ((cell_x + 1) * cell_width, (cell_y + 1) * cell_height)))
+        highlighted_image = draw_highlight(grid_image, image_highlights)
+        
+
+        # Convert image to bytes
+        image_bytes = Image.fromarray(highlighted_image.astype(np.uint8))
+        byte_io = io.BytesIO()
+        image_bytes.save(byte_io, format='PNG')
+
+        window['-GRAPH-'].erase()
+        window['-GRAPH-'].draw_image(data=byte_io.getvalue(),
+                                     location=(0, 0))
 
     # Update the image counter
     window["-COUNTER-"].update(f"{current_image_index + 1}/{len(image_list)}")

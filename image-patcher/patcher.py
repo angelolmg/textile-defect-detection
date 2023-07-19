@@ -17,7 +17,8 @@ grid_thickness = 2
 menu_layout = [
     [sg.Button("Load Images")],
     [sg.Button("<<", key="-PREV-"), sg.Button(">>", key="-NEXT-")],
-    [sg.Text("", key="-COUNTER-", size=(10, 1), justification="center")]
+    [sg.Text("", key="-COUNTER-", size=(10, 1), justification="center")],
+    [sg.Button("Patch")]
 ]
 
 filename_text = sg.Text("", key="-FILENAME-", size=(30, 1), justification="center")
@@ -61,21 +62,39 @@ def draw_grid(image):
     return image
 
 def draw_highlight(image, highlights, color):
-    for (start_point, end_point) in highlights:
-        x1, y1 = start_point
-        x2, y2 = end_point
+    for (cell_x, cell_y) in highlights:
+        top_left = (cell_x * 64, cell_y * 64)
+        bottom_right = ((cell_x + 1) * 64, (cell_y + 1) * 64)
+        x1, y1 = top_left
+        x2, y2 = bottom_right
         x, y, w, h = x1, y1, abs(x2-x1), abs(y2-y1)
 
         sub_img = image[y+2:y+h-1, x+2:x+w-1]
         color_rect = np.ones(sub_img.shape, dtype=np.uint8) * color
-        res = cv2.addWeighted(sub_img.astype(np.float32), 1.0, color_rect.astype(np.float32), 0.15, 1.0)
+        res = cv2.addWeighted(sub_img.astype(np.float32), 0.8, color_rect.astype(np.float32), 0.8, 1.0)
 
         # Putting the image back to its position
         image[y+2:y+h-1, x+2:x+w-1] = res.astype(np.uint8)
 
     return image
 
+# Function to create patches and save them
+def save_patch(image, name, patch_size, cell_x, cell_y):
+    top_left = (cell_x * 64, cell_y * 64)
+    bottom_right = ((cell_x + 1) * 64, (cell_y + 1) * 64)
+    x1, y1 = top_left
+    x2, y2 = bottom_right
+    x, y, w, h = x1, y1, abs(x2-x1), abs(y2-y1)
 
+    patch = image[y:y+h, x:x+w]
+    patch_name = f"{name}_patch{cell_x}-{cell_y}.png"
+
+    if (cell_x, cell_y) in image_highlights:
+        patch_path = os.path.join("defective", patch_name)
+    else:
+        patch_path = os.path.join("good", patch_name)
+
+    cv2.imwrite(patch_path, patch)
 
 # Event loop
 while True:
@@ -153,6 +172,32 @@ while True:
         # Update the filename text
         filename_text.update(os.path.basename(image_list[current_image_index]))
 
+    elif event == "Patch":
+        # Get the current working directory
+        current_dir = os.getcwd()
+
+        # Create "defective" and "good" folders
+        defective_folder = os.path.join(current_dir, "defective")
+        good_folder = os.path.join(current_dir, "good")
+        os.makedirs(defective_folder, exist_ok=True)
+        os.makedirs(good_folder, exist_ok=True)
+
+        # Get the current image
+        current_image_path = image_list[current_image_index]
+        current_image = cv2.imread(current_image_path)
+        image_name = os.path.basename(current_image_path).split(".")[0]
+
+        # Resize the image to 512x512
+        resized_image = cv2.resize(current_image, (512, 512))
+
+        # Create patches
+        patch_size = 64
+        for cell_x in range(grid_size):
+            for cell_y in range(grid_size):
+                save_patch(resized_image, image_name, patch_size, cell_x, cell_y)
+
+        sg.popup("Patching completed!", title="Patch")
+
     elif event == '-GRAPH-':
         # Get the clicked cell coordinates based on the click position
         cell_width = max_width // grid_size
@@ -164,17 +209,15 @@ while True:
         # Update the displayed image
         resized_image = resize_image(image_list[current_image_index], max_width, max_height)
         grid_image = draw_grid(resized_image)
-        
-        # Highlight the clicked cell by drawing a rectangle
-        top_left = (cell_x * cell_width, cell_y * cell_height)
-        bottom_right = ((cell_x + 1) * cell_width, (cell_y + 1) * cell_height)
 
-        if (top_left, bottom_right) not in image_highlights:
-            image_highlights.append((top_left, bottom_right))
-        else: image_highlights.remove((top_left, bottom_right))
+        # Highlight the clicked cell by drawing a rectangle
+        if (cell_x, cell_y) not in image_highlights:
+            image_highlights.append((cell_x, cell_y))
+        else:
+            image_highlights.remove((cell_x, cell_y))
 
         highlighted_image = draw_highlight(grid_image, image_highlights, (0, 255, 0))
-        
+
         # Convert image to bytes
         image_bytes = Image.fromarray(highlighted_image.astype(np.uint8))
         byte_io = io.BytesIO()
@@ -182,7 +225,9 @@ while True:
 
         window['-GRAPH-'].erase()
         window['-GRAPH-'].draw_image(data=byte_io.getvalue(), location=(0, 0))
-        
+
+    # Update the image counter
+    window["-COUNTER-"].update(f"{current_image_index + 1}/{len(image_list)}")
 
 # Close the window
 window.close()

@@ -12,7 +12,7 @@ current_image_index = 0
 max_width = 512
 max_height = 512
 grid_size = 8
-grid_thickness = 2
+grid_thickness = 1
 
 
 # Function to create and display the class selection layout

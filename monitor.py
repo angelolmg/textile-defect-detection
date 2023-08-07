@@ -10,36 +10,17 @@ import os
 # FRAMES TO SKIP = (VIDEO ORIGINAL FPS * SECONDS TO SKIP) - 1 = (60 * 2) - 1 = 119
 FRAME_SKIP = 119
 
-def process_and_save(frame, frame_count):
+def process_and_save_frame(frame, frame_count):
+    # Turn frame to grayscale
     gray_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
-    # Clamp the original frame to the closest resolution multiple of 64
-    # clamped_width = frame.shape[1] // 64 * 64
-    # clamped_height = frame.shape[0] // 64 * 64
-    # clamped_frame = frame[:clamped_height, :clamped_width]
-    
-    clamped_frame = cv2.resize(gray_frame, (768, 512))
+    # Normalize it to train size then save to disk for inference
+    normalized_frame = cv2.resize(gray_frame, (768, 512))
     save_path = os.path.join('frames', f'cam0_{frame_count}.jpg')
-    cv2.imwrite(save_path, clamped_frame)
+    cv2.imwrite(save_path, normalized_frame)
 
-    # Divide the clamped frame into 64 height slices and save them as images
-    # slice_height = 64
-    # for i in range(0, 512, slice_height):
-    #     slice_image = clamped_frame[i:i + slice_height, :]
-    #     save_path = os.path.join('frames', f'cam0_{frame_count}_{i // slice_height}.jpg')
-    #     cv2.imwrite(save_path, slice_image)
-
-    # Resize the frame to 780x128 and convert it to grayscale
-    display_frame = cv2.resize(gray_frame, (780, 128))
-
-    # image = Image.fromarray(display_frame)
-
-    # Save the grayscale frame as an image
-    # save_path = os.path.join('frames', f'cam0_{frame_count}_gray.jpg')
-    # cv2.imwrite(save_path, gray_frame)
-
-    # Convert the OpenCV grayscale image to PIL format
-    return Image.fromarray(display_frame)
+    # Resize to display size then update the image in the main window
+    return Image.fromarray(cv2.resize(gray_frame, (780, 128)))
 
 
 def update_camera_image(main_window, video_file):
@@ -55,11 +36,9 @@ def update_camera_image(main_window, video_file):
         # Read a frame from the video
         ret, frame = cap.read()
         if not ret:
-            # Process image then save to disk
-            post_processed_image = process_and_save(last_frame, frame_count)
-
-            # Update the image in the main window
-            main_window['-IMAGE_CAM_0-'].update(data=ImageTk.PhotoImage(post_processed_image))
+            # Process and save frame then update the image in the main window
+            display_image = process_and_save_frame(last_frame, frame_count)
+            main_window['-IMAGE_CAM_0-'].update(data=ImageTk.PhotoImage(display_image))
 
             # Break the loop if the video ends
             break
@@ -71,11 +50,9 @@ def update_camera_image(main_window, video_file):
         if frame_count != 1 and frame_count % FRAME_SKIP != 0:
             continue
 
-        # Process image then save to disk
-        post_processed_image = process_and_save(frame, frame_count)
-
-        # Update the image in the main window
-        main_window['-IMAGE_CAM_0-'].update(data=ImageTk.PhotoImage(post_processed_image))
+        # Process and save frame then update the image in the main window
+        display_image = process_and_save_frame(frame, frame_count)
+        main_window['-IMAGE_CAM_0-'].update(data=ImageTk.PhotoImage(display_image))
 
     # Release the video capture object
     cap.release()

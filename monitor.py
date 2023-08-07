@@ -1,6 +1,84 @@
 import PySimpleGUI as sg
 from PIL import Image, ImageTk
+import cv2
+import threading
+import os
 
+# Get images from feed only every FRAME_SKIP frames
+# SECONDS TO SKIP = VIDEO ORIGINAL HEIGHT / (VIDEO ORIGINAL FPS * VIDEO SPEED PER FRAME IN PIXELS)
+# SECONDS TO SKIP = 600 / (60 * 5) = 2
+# FRAMES TO SKIP = (VIDEO ORIGINAL FPS * SECONDS TO SKIP) - 1 = (60 * 2) - 1 = 119
+FRAME_SKIP = 119
+
+def process_and_save(frame, frame_count):
+    gray_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+
+    # Clamp the original frame to the closest resolution multiple of 64
+    # clamped_width = frame.shape[1] // 64 * 64
+    # clamped_height = frame.shape[0] // 64 * 64
+    # clamped_frame = frame[:clamped_height, :clamped_width]
+    
+    clamped_frame = cv2.resize(gray_frame, (768, 512))
+    save_path = os.path.join('frames', f'cam0_{frame_count}.jpg')
+    cv2.imwrite(save_path, clamped_frame)
+
+    # Divide the clamped frame into 64 height slices and save them as images
+    # slice_height = 64
+    # for i in range(0, 512, slice_height):
+    #     slice_image = clamped_frame[i:i + slice_height, :]
+    #     save_path = os.path.join('frames', f'cam0_{frame_count}_{i // slice_height}.jpg')
+    #     cv2.imwrite(save_path, slice_image)
+
+    # Resize the frame to 780x128 and convert it to grayscale
+    display_frame = cv2.resize(gray_frame, (780, 128))
+
+    # image = Image.fromarray(display_frame)
+
+    # Save the grayscale frame as an image
+    # save_path = os.path.join('frames', f'cam0_{frame_count}_gray.jpg')
+    # cv2.imwrite(save_path, gray_frame)
+
+    # Convert the OpenCV grayscale image to PIL format
+    return Image.fromarray(display_frame)
+
+
+def update_camera_image(main_window, video_file):
+    # Open the video file
+    cap = cv2.VideoCapture(video_file)
+    frame_count = 0
+
+    # Create the 'frames' folder if it doesn't exist
+    if not os.path.exists('frames'):
+        os.makedirs('frames')
+
+    while True:
+        # Read a frame from the video
+        ret, frame = cap.read()
+        if not ret:
+            # Process image then save to disk
+            post_processed_image = process_and_save(last_frame, frame_count)
+
+            # Update the image in the main window
+            main_window['-IMAGE_CAM_0-'].update(data=ImageTk.PhotoImage(post_processed_image))
+
+            # Break the loop if the video ends
+            break
+
+        last_frame = frame
+        frame_count += 1
+
+        # Skip every FRAME_SKIP frames
+        if frame_count != 1 and frame_count % FRAME_SKIP != 0:
+            continue
+
+        # Process image then save to disk
+        post_processed_image = process_and_save(frame, frame_count)
+
+        # Update the image in the main window
+        main_window['-IMAGE_CAM_0-'].update(data=ImageTk.PhotoImage(post_processed_image))
+
+    # Release the video capture object
+    cap.release()
 
 def main():
     # Set the default values for the settings
@@ -21,13 +99,13 @@ def main():
         [sg.Image(key='-IMAGE_CAM_0-', size=(750, 128), pad=12)],
     ]
 
-    camera_layout_cam1 = [
-        [sg.Image(key='-IMAGE_CAM_1-', size=(750, 128), pad=12)],
-    ]
+    # camera_layout_cam1 = [
+    #     [sg.Image(key='-IMAGE_CAM_1-', size=(750, 128), pad=12)],
+    # ]
 
-    camera_layout_cam2 = [
-        [sg.Image(key='-IMAGE_CAM_2-', size=(750, 128), pad=12)],
-    ]
+    # camera_layout_cam2 = [
+    #     [sg.Image(key='-IMAGE_CAM_2-', size=(750, 128), pad=12)],
+    # ]
 
     # Define the layout for each tab in the stats section
     roll_map_layout = [
@@ -55,8 +133,11 @@ def main():
     layout = [
         [sg.Menu([['&File', ['&Load feed', 'Open session',
                  'Save session', '---', '&Settings', 'E&xit']]])],
-        [sg.TabGroup([[sg.Tab('Cam_0', camera_layout_cam0)], [sg.Tab(
-            'Cam_1', camera_layout_cam1)], [sg.Tab('Cam_2', camera_layout_cam2)]])],
+        [sg.TabGroup([
+            [sg.Tab('Cam_0', camera_layout_cam0)], 
+            # [sg.Tab('Cam_1', camera_layout_cam1)], 
+            # [sg.Tab('Cam_2', camera_layout_cam2)]
+            ])],
         [sg.TabGroup([[sg.Tab('Roll Map', roll_map_layout)], [sg.Tab('Summary', summary_layout)], [
                      sg.Tab('Defects', defects_layout)]], expand_x=True,expand_y=True)],  # Adjust the width of the tabgroup
         [sg.Column(info_layout, expand_x=True, element_justification='c')]
@@ -73,9 +154,14 @@ def main():
         elif event == 'Exit' and sg.popup_yes_no('Are you sure you want to exit?', title='Confirm Exit') == 'Yes':
             break
         elif event == 'Load feed':
-            # Add functionality to load a file here
-            file_path = sg.popup_get_file('Select a file to load')
-            # Handle file loading logic
+            # Add functionality to load a video file here
+            video_file = sg.popup_get_file('Select a video file to load')
+            if video_file:
+                # Create a separate thread for updating the camera image with video frames
+                camera_thread = threading.Thread(target=update_camera_image, args=(main_window, video_file))
+                camera_thread.daemon = True
+                camera_thread.start()
+ 
         elif event == 'Settings':
             # Open the settings window when "Settings" is clicked
             settings_layout = [
@@ -113,9 +199,9 @@ def main():
 
             settings_window.close()  # Close the settings window if the "Cancel" button is clicked
 
-        main_window["-IMAGE_CAM_0-"].update(data = ImageTk.PhotoImage(images[index%len(images)]))
-        main_window["-IMAGE_CAM_1-"].update(data = ImageTk.PhotoImage(images[(index+1)%len(images)]))
-        main_window["-IMAGE_CAM_2-"].update(data = ImageTk.PhotoImage(images[(index+2)%len(images)]))
+        # main_window["-IMAGE_CAM_0-"].update(data = ImageTk.PhotoImage(images[index%len(images)]))
+        # main_window["-IMAGE_CAM_1-"].update(data = ImageTk.PhotoImage(images[(index+1)%len(images)]))
+        # main_window["-IMAGE_CAM_2-"].update(data = ImageTk.PhotoImage(images[(index+2)%len(images)]))
         # Update the speed value text after applying the settings
         main_window['-SPEED_VALUE-'].update(conveyor_speed)
         index = index + 1

@@ -76,7 +76,7 @@ def process_image(file_path, model):
 
     print(f'Number of patches: {len(images)}')
     results = model.predict(source=images, conf=0.25)
-    print(results[0].probs)
+
     marked_images = []
     marked_coordinates = []
     for i in range(len(images)):

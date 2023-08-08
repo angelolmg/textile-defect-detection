@@ -3,6 +3,10 @@ from PIL import Image, ImageTk
 import cv2
 import threading
 import os
+import time
+import ultralytics
+from ultralytics import YOLO
+
 
 # Get images from feed only every FRAME_SKIP frames
 # SECONDS TO SKIP = VIDEO ORIGINAL HEIGHT / (VIDEO ORIGINAL FPS * VIDEO SPEED PER FRAME IN PIXELS)
@@ -57,7 +61,73 @@ def update_camera_image(main_window, video_file):
     # Release the video capture object
     cap.release()
 
+def process_image(file_path, model):
+    input_image = cv2.imread(os.path.join('frames', file_path))
+    cell_size = 64
+    rows, cols, _ = input_image.shape
+    images = []
+    image_coordinates = []
+
+    for y in range(0, rows, cell_size):
+        for x in range(0, cols, cell_size):
+            image = input_image[y:y+cell_size, x:x+cell_size]
+            images.append(image)
+            image_coordinates.append((x, y, x+cell_size, y+cell_size))
+
+    print(f'Number of patches: {len(images)}')
+    results = model.predict(source=images, conf=0.25)
+    print(results[0].probs)
+    marked_images = []
+    marked_coordinates = []
+    for i in range(len(images)):
+        if results[i].probs.top1 == 0 and results[i].probs.top1conf > 0.99:
+            marked_images.append(images[i])
+            marked_coordinates.append(image_coordinates[i])
+
+    print(f'Number of patches with defect: {len(marked_images)}')
+    print(f'Ratio defect/good: {len(marked_images)/len(images)*100}%')
+
+    for coordinates in marked_coordinates:
+        x1, y1, x2, y2 = coordinates
+        cv2.rectangle(input_image, (x1, y1), (x2, y2), (0, 0, 255), 2)
+
+    save_path = os.path.join('detections', file_path)
+    cv2.imwrite(save_path, input_image)
+
+def cleanup_frames_folder():
+    model = YOLO("models/yolov8m-cls_tilda400_50ep/yolov8m-cls_tilda400_50ep.pt")
+    frames_folder = 'frames'
+
+    # Create the 'frames' folder if it doesn't exist
+    if not os.path.exists('frames'):
+        os.makedirs('frames')
+
+    # Create the 'detections' folder if it doesn't exist
+    if not os.path.exists('detections'):
+        os.makedirs('detections')
+
+    while True:
+        time.sleep(2)
+        files = os.listdir(frames_folder)
+        if len(files) > 0:
+            print(f"{len(files)} files inside 'frames' folder")
+            
+            # Process one image from the frames folder
+            oldest_file = min(files, key=lambda f: os.path.getctime(os.path.join(frames_folder, f)))
+            print(f"Processing: {oldest_file}")
+            process_image(oldest_file, model)
+
+            os.remove(os.path.join(frames_folder, oldest_file))
+            print(f"Deleted: {oldest_file}")
+        else:
+            print("No files inside 'frames' folder")
+
 def main():
+    # Start a thread to clean up the frames folder
+    cleanup_thread = threading.Thread(target=cleanup_frames_folder)
+    cleanup_thread.daemon = True
+    cleanup_thread.start()
+
     # Set the default values for the settings
     patch_size = 64
     resize_size = 512

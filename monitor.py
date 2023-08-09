@@ -1,3 +1,6 @@
+# Working on Windows 10 (WSL 1)
+# Run export DISPLAY=:0 and Xming (https://sourceforge.net/projects/xming/)
+
 import PySimpleGUI as sg
 from PIL import Image, ImageTk
 import cv2
@@ -6,7 +9,6 @@ import os
 import time
 import ultralytics
 from ultralytics import YOLO
-
 
 # Get images from feed only every FRAME_SKIP frames
 # SECONDS TO SKIP = VIDEO ORIGINAL HEIGHT / (VIDEO ORIGINAL FPS * VIDEO SPEED PER FRAME IN PIXELS)
@@ -23,9 +25,6 @@ def process_and_save_frame(frame, frame_count):
     save_path = os.path.join('frames', f'cam0_{frame_count}.jpg')
     cv2.imwrite(save_path, normalized_frame)
 
-    # Resize to display size then update the image in the main window
-    return Image.fromarray(cv2.resize(gray_frame, (780, 128)))
-
 
 def update_camera_image(main_window, video_file):
     # Open the video file
@@ -41,8 +40,9 @@ def update_camera_image(main_window, video_file):
         ret, frame = cap.read()
         if not ret:
             # Process and save frame then update the image in the main window
-            display_image = process_and_save_frame(last_frame, frame_count)
-            main_window['-IMAGE_CAM_0-'].update(data=ImageTk.PhotoImage(display_image))
+            process_and_save_frame(last_frame, frame_count)
+            main_window['-IMAGE_CAM_0-'].update(
+                data=ImageTk.PhotoImage(Image.fromarray(cv2.resize(last_frame, (780, 128)))))
 
             # Break the loop if the video ends
             break
@@ -50,13 +50,13 @@ def update_camera_image(main_window, video_file):
         last_frame = frame
         frame_count += 1
 
-        # Skip every FRAME_SKIP frames
-        if frame_count != 1 and frame_count % FRAME_SKIP != 0:
-            continue
-
+        # Every FRAME_SKIP frames
         # Process and save frame then update the image in the main window
-        display_image = process_and_save_frame(frame, frame_count)
-        main_window['-IMAGE_CAM_0-'].update(data=ImageTk.PhotoImage(display_image))
+        if frame_count == 1 or frame_count % FRAME_SKIP == 0:
+            process_and_save_frame(frame, frame_count)
+
+        main_window['-IMAGE_CAM_0-'].update(data=ImageTk.PhotoImage(
+                Image.fromarray(cv2.resize(frame, (780, 128)))))
 
     # Release the video capture object
     cap.release()
@@ -94,8 +94,13 @@ def process_image(file_path, model):
     save_path = os.path.join('detections', file_path)
     cv2.imwrite(save_path, input_image)
 
+
 def cleanup_frames_folder():
-    model = YOLO("models/yolov8m-cls_tilda400_50ep/yolov8m-cls_tilda400_50ep.pt")
+    model = YOLO(
+        "models/yolov8m-cls_tilda400_50ep/yolov8m-cls_tilda400_50ep.pt")
+    print(model.names)
+
+    
     frames_folder = 'frames'
 
     # Create the 'frames' folder if it doesn't exist
@@ -111,9 +116,10 @@ def cleanup_frames_folder():
         files = os.listdir(frames_folder)
         if len(files) > 0:
             print(f"{len(files)} files inside 'frames' folder")
-            
+
             # Process one image from the frames folder
-            oldest_file = min(files, key=lambda f: os.path.getctime(os.path.join(frames_folder, f)))
+            oldest_file = min(files, key=lambda f: os.path.getctime(
+                os.path.join(frames_folder, f)))
             print(f"Processing: {oldest_file}")
             process_image(oldest_file, model)
 
@@ -135,11 +141,11 @@ def main():
     conveyor_speed = 60
     model_file = 'models/yolov8s-cls_tilda400_50ep/yolov8s-cls_tilda400_50ep.pt'
     images = [
-        Image.open(f"./images/027.jpg").resize((750,128)),
-        Image.open(f"./images/003.jpg").resize((750,128)),
-        Image.open(f"./images/372.jpg").resize((750,128)),
+        Image.open(f"./images/027.jpg").resize((750, 128)),
+        Image.open(f"./images/003.jpg").resize((750, 128)),
+        Image.open(f"./images/372.jpg").resize((750, 128)),
     ]
-    index=0
+    index = 0
 
     # Define the layout for each camera monitor section
     camera_layout_cam0 = [
@@ -171,8 +177,10 @@ def main():
     info_font = ('Any-Bold', 11, 'bold')
     info_layout = [
         [sg.Text('DPS: ', font=info_font), sg.Text('0', key='-DPS_VALUE-', size=(5, 1)),
-         sg.Text('Speed (m/min): ', font=info_font), sg.Text('60', key='-SPEED_VALUE-', size=(5, 1)),
-         sg.Text('Position (m): ', font=info_font), sg.Text('0', key='-POS_VALUE-', size=(5, 1)),
+         sg.Text('Speed (m/min): ', font=info_font), sg.Text('60',
+                                                             key='-SPEED_VALUE-', size=(5, 1)),
+         sg.Text('Position (m): ', font=info_font), sg.Text(
+             '0', key='-POS_VALUE-', size=(5, 1)),
          sg.Text('Defect Count: ', font=info_font), sg.Text('0', key='-DEFECT_COUNT_VALUE-', size=(5, 1))]
     ]
 
@@ -181,12 +189,12 @@ def main():
         [sg.Menu([['&File', ['&Load feed', 'Open session',
                  'Save session', '---', '&Settings', 'E&xit']]])],
         [sg.TabGroup([
-            [sg.Tab('Cam_0', camera_layout_cam0)], 
-            # [sg.Tab('Cam_1', camera_layout_cam1)], 
+            [sg.Tab('Cam_0', camera_layout_cam0)],
+            # [sg.Tab('Cam_1', camera_layout_cam1)],
             # [sg.Tab('Cam_2', camera_layout_cam2)]
-            ])],
+        ])],
         [sg.TabGroup([[sg.Tab('Roll Map', roll_map_layout)], [sg.Tab('Summary', summary_layout)], [
-                     sg.Tab('Defects', defects_layout)]], expand_x=True,expand_y=True)],  # Adjust the width of the tabgroup
+                     sg.Tab('Defects', defects_layout)]], expand_x=True, expand_y=True)],  # Adjust the width of the tabgroup
         [sg.Column(info_layout, expand_x=True, element_justification='c')]
     ]
 
@@ -205,10 +213,11 @@ def main():
             video_file = sg.popup_get_file('Select a video file to load')
             if video_file:
                 # Create a separate thread for updating the camera image with video frames
-                camera_thread = threading.Thread(target=update_camera_image, args=(main_window, video_file))
+                camera_thread = threading.Thread(
+                    target=update_camera_image, args=(main_window, video_file))
                 camera_thread.daemon = True
                 camera_thread.start()
- 
+
         elif event == 'Settings':
             # Open the settings window when "Settings" is clicked
             settings_layout = [

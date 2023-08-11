@@ -10,11 +10,34 @@ import time
 import ultralytics
 from ultralytics import YOLO
 
+import csv
+import base64
+import datetime
+
 # Get images from feed only every FRAME_SKIP frames
 # SECONDS TO SKIP = VIDEO ORIGINAL HEIGHT / (VIDEO ORIGINAL FPS * VIDEO SPEED PER FRAME IN PIXELS)
 # SECONDS TO SKIP = 600 / (60 * 5) = 2
 # FRAMES TO SKIP = (VIDEO ORIGINAL FPS * SECONDS TO SKIP) - 1 = (60 * 2) - 1 = 119
 FRAME_SKIP = 119
+
+def save_entries_to_csv(csv_file, entries):
+    # Check if CSV file already exists
+    file_exists = os.path.exists(csv_file)
+    with open(csv_file, mode='a', newline='') as file:
+        fieldnames = ['index', 'camera', 'class', 'pos_x', 'pos_y', 'date','img_base64']
+        writer = csv.DictWriter(file, fieldnames=fieldnames)
+        if not file_exists:
+            # Write headers only if the file doesn't exist
+            writer.writeheader()
+        writer.writerows(entries)
+
+def read_entries_from_csv(csv_file):
+    entries = []
+    with open(csv_file, mode='r') as file:
+        reader = csv.reader(file)
+        for row in reader:
+            entries.append(row)
+    return entries
 
 def process_and_save_frame(frame, frame_count):
     # Turn frame to grayscale
@@ -61,13 +84,15 @@ def update_camera_image(main_window, video_file):
     # Release the video capture object
     cap.release()
 
-def process_image(file_path, model):
-    input_image = cv2.imread(os.path.join('frames', file_path))
+def process_image(file_name, model):
+    file_path = os.path.join('frames', file_name)
+    input_image = cv2.imread(file_path)
     cell_size = 64
     rows, cols, _ = input_image.shape
     images = []
     image_coordinates = []
 
+    # Cutout fabric patches
     for y in range(0, rows, cell_size):
         for x in range(0, cols, cell_size):
             image = input_image[y:y+cell_size, x:x+cell_size]
@@ -75,8 +100,11 @@ def process_image(file_path, model):
             image_coordinates.append((x, y, x+cell_size, y+cell_size))
 
     print(f'Number of patches: {len(images)}')
+
+    # Defect inference
     results = model.predict(source=images, conf=0.25)
 
+    # Filter defects
     marked_images = []
     marked_coordinates = []
     for i in range(len(images)):
@@ -87,20 +115,39 @@ def process_image(file_path, model):
     print(f'Number of patches with defect: {len(marked_images)}')
     print(f'Ratio defect/good: {len(marked_images)/len(images)*100}%')
 
+    # Save defect images to dictionary
+    csv_file = 'defects.csv'
+    new_entries = []
+
+    for i in range(len(marked_images)):
+
+        # Convert the image to a base64 string
+        _, buffer = cv2.imencode('.jpg', marked_images[i])
+        base64_image = base64.b64encode(buffer).decode('utf-8')
+        index = file_name.split('_')[1].split('.')[0]
+        new_entries.append({'index': index, 
+                            'camera': 'Cam_0', 
+                            'class': 'defective', 
+                            'pos_x': marked_coordinates[i][0], 
+                            'pos_y': marked_coordinates[i][1],
+                            'date': datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                            'img_base64': base64_image})
+
+    save_entries_to_csv(csv_file, new_entries)
+
     for coordinates in marked_coordinates:
         x1, y1, x2, y2 = coordinates
         cv2.rectangle(input_image, (x1, y1), (x2, y2), (0, 0, 255), 2)
 
-    save_path = os.path.join('detections', file_path)
+    save_path = os.path.join('detections', file_name)
     cv2.imwrite(save_path, input_image)
 
 
 def cleanup_frames_folder():
     model = YOLO(
-        "models/yolov8m-cls_tilda400_50ep/yolov8m-cls_tilda400_50ep.pt")
+        "models/yolov8n-cls_tilda400_50ep/yolov8n-cls_tilda400_50ep.pt")
     print(model.names)
 
-    
     frames_folder = 'frames'
 
     # Create the 'frames' folder if it doesn't exist
@@ -112,7 +159,7 @@ def cleanup_frames_folder():
         os.makedirs('detections')
 
     while True:
-        time.sleep(2)
+        time.sleep(1)
         files = os.listdir(frames_folder)
         if len(files) > 0:
             print(f"{len(files)} files inside 'frames' folder")

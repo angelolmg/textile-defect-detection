@@ -22,16 +22,19 @@ import numpy as np
 # FRAMES TO SKIP = (VIDEO ORIGINAL FPS * SECONDS TO SKIP) - 1 = (60 * 2) - 1 = 119
 FRAME_SKIP = 119
 
+
 def save_entries_to_csv(csv_file, entries):
     # Check if CSV file already exists
     file_exists = os.path.exists(csv_file)
     with open(csv_file, mode='a', newline='') as file:
-        fieldnames = ['frame_pos','frame_index', 'camera', 'class', 'pos_x', 'pos_y', 'date','img_base64']
+        fieldnames = ['frame_pos', 'frame_index', 'camera',
+                      'class', 'pos_x', 'pos_y', 'date', 'img_base64']
         writer = csv.DictWriter(file, fieldnames=fieldnames)
         if not file_exists:
             # Write headers only if the file doesn't exist
             writer.writeheader()
         writer.writerows(entries)
+
 
 def read_entries_from_csv(csv_file):
     entries = []
@@ -40,6 +43,7 @@ def read_entries_from_csv(csv_file):
         for row in reader:
             entries.append(row)
     return entries
+
 
 def process_and_save_frame(frame, frame_count):
     # Turn frame to grayscale
@@ -81,10 +85,11 @@ def update_camera_image(main_window, video_file):
             process_and_save_frame(frame, frame_count)
 
         main_window['-IMAGE_CAM_0-'].update(data=ImageTk.PhotoImage(
-                Image.fromarray(cv2.resize(frame, (780, 128)))))
+            Image.fromarray(cv2.resize(frame, (780, 128)))))
 
     # Release the video capture object
     cap.release()
+
 
 def process_image(file_name, model):
     file_path = os.path.join('frames', file_name)
@@ -105,12 +110,14 @@ def process_image(file_name, model):
 
     # Defect inference
     results = model.predict(source=images, conf=0.25)
-
+    print(results[0].probs)
     # Filter defects
     marked_images = []
+    top1 = []
     marked_coordinates = []
     for i in range(len(images)):
-        if results[i].probs.top1 == 0 and results[i].probs.top1conf > 0.99:
+        if results[i].probs.top1 != 0 and results[i].probs.top1conf > 0.99:
+            top1.append(int(results[i].probs.top1))
             marked_images.append(images[i])
             marked_coordinates.append(image_coordinates[i])
 
@@ -118,6 +125,7 @@ def process_image(file_name, model):
     print(f'Ratio defect/good: {len(marked_images)/len(images)*100}%')
 
     # Save defect images to dictionary
+    classes = ['good', 'hole', 'objects', 'oil spot', 'thread error']
     csv_file = 'defects.csv'
     new_entries = []
 
@@ -128,19 +136,27 @@ def process_image(file_name, model):
         base64_image = base64.b64encode(buffer).decode('utf-8')
         index = int(file_name.split('_')[1].split('.')[0])
         new_entries.append({'frame_pos': int(index/119),
-                            'frame_index': index, 
-                            'camera': 'Cam_0', 
-                            'class': 'defective', 
-                            'pos_x': marked_coordinates[i][0], 
+                            'frame_index': index,
+                            'camera': 'Cam_0',
+                            'class': classes[top1[i]],
+                            'pos_x': marked_coordinates[i][0],
                             'pos_y': marked_coordinates[i][1],
                             'date': datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
                             'img_base64': base64_image})
 
     save_entries_to_csv(csv_file, new_entries)
 
-    for coordinates in marked_coordinates:
-        x1, y1, x2, y2 = coordinates
-        cv2.rectangle(input_image, (x1, y1), (x2, y2), (0, 0, 255), 2)
+    color_mapping = {
+        'good': (0, 255, 0),
+        'hole': (0, 0, 255),
+        'objects': (255, 0, 0),
+        'oil spot': (0, 255, 255),
+        'thread error': (203, 192, 255)
+    }
+
+    for i in range(len(marked_coordinates)):
+        x1, y1, x2, y2 = marked_coordinates[i]
+        cv2.rectangle(input_image, (x1, y1), (x2, y2), color_mapping[new_entries[i]['class']], 2)
 
     save_path = os.path.join('detections', file_name)
     cv2.imwrite(save_path, input_image)
@@ -148,7 +164,7 @@ def process_image(file_name, model):
 
 def cleanup_frames_folder():
     model = YOLO(
-        "models/yolov8n-cls_tilda400_50ep/yolov8n-cls_tilda400_50ep.pt")
+        "models/multiclass/yolov8s-cls_tilda400_50ep/weights/best.pt")
     print(model.names)
 
     frames_folder = 'frames'
@@ -178,6 +194,7 @@ def cleanup_frames_folder():
         else:
             print("No files inside 'frames' folder")
 
+
 def create_defect_scatter_plot(file_path):
     # Check if the 'defects.csv' file exists
     if not os.path.exists('defects.csv'):
@@ -193,26 +210,41 @@ def create_defect_scatter_plot(file_path):
 
     x_positions = []
     y_positions = []
+    defect_class_color = []
+
+    classes = {'good': 'yellow', 'hole': 'red', 'objects': 'blue',
+               'oil spot': 'green', 'thread error': 'brown'}
 
     for entry in data:
         frame_pos = int(entry['frame_pos'])
+        frame_class = entry['class']
         pos_x = int(entry['pos_x'])
         pos_y = int(entry['pos_y'])
 
         # Considering 512px = 15cm, 0.3 is the approximate ratio px/cm
         x_positions.append(0.03 * (frame_pos * 512 + pos_y))
         y_positions.append(pos_x * 0.03)
+        defect_class_color.append(classes[frame_class])
 
     plt.figure(figsize=(8.75, 3))
-    plt.scatter(x_positions, y_positions, marker='o', color='red')
+    scatter = plt.scatter(x_positions, y_positions, marker='o', color=defect_class_color)
+
+     # Create a custom legend
+    legend_labels = [plt.Line2D([0], [0], marker='o', color='w', label=class_name,
+                                 markerfacecolor=class_color) for class_name, class_color in classes.items()]
+    plt.legend(handles=legend_labels, loc='upper right')
+
     plt.xlabel('Vertical position (cm)')
     plt.ylabel('Horizontal position (cm)')
+    plt.xlim(-5, 150 + 30)
+    plt.ylim(-2, 24)
     # plt.title('Defect Occurrences')
-    plt.grid(True)
+    # plt.grid(True)
     plt.savefig(file_path, bbox_inches='tight')
     plt.close()
 
     return True
+
 
 def main():
     # Start a thread to clean up the frames folder
@@ -275,7 +307,7 @@ def main():
     # Combine all the layouts into one main layout
     layout = [
         [sg.Menu([['&File', ['&Load feed', 'Open session',
-                 'Save session', '---', '&Settings', 'E&xit']]])],
+                             'Save session', '&Reset session', '---', '&Settings', 'E&xit']]])],
         [sg.TabGroup([
             [sg.Tab('Cam_0', camera_layout_cam0)],
             # [sg.Tab('Cam_1', camera_layout_cam1)],
@@ -290,7 +322,7 @@ def main():
     main_window = sg.Window('Fabric Monitor', layout, size=(800, 600))
 
     while True:
-        event, values = main_window.read(timeout=100)
+        event, values = main_window.read(timeout=1000)
 
         if event == sg.WIN_CLOSED:
             break
@@ -305,7 +337,13 @@ def main():
                     target=update_camera_image, args=(main_window, video_file))
                 camera_thread.daemon = True
                 camera_thread.start()
-
+        elif event == 'Reset session':
+            if sg.popup_yes_no('Are you sure you want to reset the session?\nThis will delete "defects.csv" and "rollmap_plot.png".', title='Confirm Reset') == 'Yes':
+                if os.path.exists('defects.csv'):
+                    os.remove('defects.csv')
+                if os.path.exists('rollmap_plot.png'):
+                    os.remove('rollmap_plot.png')
+                print("Session reset completed.")
         elif event == 'Settings':
             # Open the settings window when "Settings" is clicked
             settings_layout = [
@@ -343,19 +381,20 @@ def main():
 
             settings_window.close()  # Close the settings window if the "Cancel" button is clicked
 
-
         # main_window["-IMAGE_CAM_0-"].update(data = ImageTk.PhotoImage(images[index%len(images)]))
         # main_window["-IMAGE_CAM_1-"].update(data = ImageTk.PhotoImage(images[(index+1)%len(images)]))
         # main_window["-IMAGE_CAM_2-"].update(data = ImageTk.PhotoImage(images[(index+2)%len(images)]))
         # Update the speed value text after applying the settings
         main_window['-SPEED_VALUE-'].update(conveyor_speed)
         index = index + 1
-        
+
         # Update the canvas element with the loaded image
         if create_defect_scatter_plot(rollmap_image_path):
             main_window['-CANVAS_ROLL_MAP-'].update(data=ImageTk.PhotoImage(
-                    Image.open(rollmap_image_path)))
-        
+                Image.open(rollmap_image_path)))
+        else:
+            main_window['-CANVAS_ROLL_MAP-'].update(data=None)
+
     main_window.close()
 
 

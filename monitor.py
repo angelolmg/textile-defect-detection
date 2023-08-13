@@ -13,6 +13,8 @@ from ultralytics import YOLO
 import csv
 import base64
 import datetime
+import matplotlib.pyplot as plt
+import numpy as np
 
 # Get images from feed only every FRAME_SKIP frames
 # SECONDS TO SKIP = VIDEO ORIGINAL HEIGHT / (VIDEO ORIGINAL FPS * VIDEO SPEED PER FRAME IN PIXELS)
@@ -24,7 +26,7 @@ def save_entries_to_csv(csv_file, entries):
     # Check if CSV file already exists
     file_exists = os.path.exists(csv_file)
     with open(csv_file, mode='a', newline='') as file:
-        fieldnames = ['index', 'camera', 'class', 'pos_x', 'pos_y', 'date','img_base64']
+        fieldnames = ['frame_pos','frame_index', 'camera', 'class', 'pos_x', 'pos_y', 'date','img_base64']
         writer = csv.DictWriter(file, fieldnames=fieldnames)
         if not file_exists:
             # Write headers only if the file doesn't exist
@@ -124,8 +126,9 @@ def process_image(file_name, model):
         # Convert the image to a base64 string
         _, buffer = cv2.imencode('.jpg', marked_images[i])
         base64_image = base64.b64encode(buffer).decode('utf-8')
-        index = file_name.split('_')[1].split('.')[0]
-        new_entries.append({'index': index, 
+        index = int(file_name.split('_')[1].split('.')[0])
+        new_entries.append({'frame_pos': int(index/119),
+                            'frame_index': index, 
                             'camera': 'Cam_0', 
                             'class': 'defective', 
                             'pos_x': marked_coordinates[i][0], 
@@ -175,6 +178,42 @@ def cleanup_frames_folder():
         else:
             print("No files inside 'frames' folder")
 
+def create_defect_scatter_plot(file_path):
+    # Check if the 'defects.csv' file exists
+    if not os.path.exists('defects.csv'):
+        print("No 'defects.csv' file found.")
+        return False
+
+    # Read data from the CSV file
+    data = []
+    with open('defects.csv', mode='r') as file:
+        reader = csv.DictReader(file)
+        for row in reader:
+            data.append(row)
+
+    x_positions = []
+    y_positions = []
+
+    for entry in data:
+        frame_pos = int(entry['frame_pos'])
+        pos_x = int(entry['pos_x'])
+        pos_y = int(entry['pos_y'])
+
+        # Considering 512px = 15cm, 0.3 is the approximate ratio px/cm
+        x_positions.append(0.03 * (frame_pos * 512 + pos_y))
+        y_positions.append(pos_x * 0.03)
+
+    plt.figure(figsize=(8.75, 3))
+    plt.scatter(x_positions, y_positions, marker='o', color='red')
+    plt.xlabel('Vertical position (cm)')
+    plt.ylabel('Horizontal position (cm)')
+    # plt.title('Defect Occurrences')
+    plt.grid(True)
+    plt.savefig(file_path, bbox_inches='tight')
+    plt.close()
+
+    return True
+
 def main():
     # Start a thread to clean up the frames folder
     cleanup_thread = threading.Thread(target=cleanup_frames_folder)
@@ -187,6 +226,7 @@ def main():
     detection_confidence = 0.5
     conveyor_speed = 60
     model_file = 'models/yolov8s-cls_tilda400_50ep/yolov8s-cls_tilda400_50ep.pt'
+    rollmap_image_path = 'rollmap_plot.png'
     images = [
         Image.open(f"./images/027.jpg").resize((750, 128)),
         Image.open(f"./images/003.jpg").resize((750, 128)),
@@ -209,7 +249,8 @@ def main():
 
     # Define the layout for each tab in the stats section
     roll_map_layout = [
-        [sg.Text('Roll Map')],  # Adjust the width of the tab
+        [sg.Text('Roll Map')],
+        [sg.Image(key='-CANVAS_ROLL_MAP-', size=(750, 300), pad=10)]
     ]
 
     summary_layout = [
@@ -249,7 +290,7 @@ def main():
     main_window = sg.Window('Fabric Monitor', layout, size=(800, 600))
 
     while True:
-        event, values = main_window.read(timeout=1000)
+        event, values = main_window.read(timeout=100)
 
         if event == sg.WIN_CLOSED:
             break
@@ -302,13 +343,19 @@ def main():
 
             settings_window.close()  # Close the settings window if the "Cancel" button is clicked
 
+
         # main_window["-IMAGE_CAM_0-"].update(data = ImageTk.PhotoImage(images[index%len(images)]))
         # main_window["-IMAGE_CAM_1-"].update(data = ImageTk.PhotoImage(images[(index+1)%len(images)]))
         # main_window["-IMAGE_CAM_2-"].update(data = ImageTk.PhotoImage(images[(index+2)%len(images)]))
         # Update the speed value text after applying the settings
         main_window['-SPEED_VALUE-'].update(conveyor_speed)
         index = index + 1
-
+        
+        # Update the canvas element with the loaded image
+        if create_defect_scatter_plot(rollmap_image_path):
+            main_window['-CANVAS_ROLL_MAP-'].update(data=ImageTk.PhotoImage(
+                    Image.open(rollmap_image_path)))
+        
     main_window.close()
 
 

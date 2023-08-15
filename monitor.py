@@ -135,7 +135,7 @@ def process_image(file_name, model):
         _, buffer = cv2.imencode('.jpg', marked_images[i])
         base64_image = base64.b64encode(buffer).decode('utf-8')
         index = int(file_name.split('_')[1].split('.')[0])
-        new_entries.append({'frame_pos': int(index/119),
+        new_entries.append({'frame_pos': int(index/FRAME_SKIP),
                             'frame_index': index,
                             'camera': 'Cam_0',
                             'class': classes[top1[i]],
@@ -147,10 +147,10 @@ def process_image(file_name, model):
     save_entries_to_csv(csv_file, new_entries)
 
     color_mapping = {
-        'good': (0, 255, 0),
+        'good': (0, 255, 255),
         'hole': (0, 0, 255),
         'objects': (255, 0, 0),
-        'oil spot': (0, 255, 255),
+        'oil spot': (0, 255, 0),
         'thread error': (203, 192, 255)
     }
 
@@ -160,7 +160,6 @@ def process_image(file_name, model):
 
     save_path = os.path.join('detections', file_name)
     cv2.imwrite(save_path, input_image)
-
 
 def cleanup_frames_folder():
     model = YOLO(
@@ -212,7 +211,7 @@ def create_defect_scatter_plot(file_path):
     y_positions = []
     defect_class_color = []
 
-    classes = {'good': 'yellow', 'hole': 'red', 'objects': 'blue',
+    classes = {'hole': 'red', 'objects': 'blue',
                'oil spot': 'green', 'thread error': 'brown'}
 
     for entry in data:
@@ -226,20 +225,20 @@ def create_defect_scatter_plot(file_path):
         y_positions.append(pos_x * 0.03)
         defect_class_color.append(classes[frame_class])
 
-    plt.figure(figsize=(8.75, 3))
+    plt.figure(figsize=(6.95, 3))
     scatter = plt.scatter(x_positions, y_positions, marker='o', color=defect_class_color)
 
      # Create a custom legend
     legend_labels = [plt.Line2D([0], [0], marker='o', color='w', label=class_name,
                                  markerfacecolor=class_color) for class_name, class_color in classes.items()]
-    plt.legend(handles=legend_labels, loc='upper right')
+    plt.legend(handles=legend_labels, loc='upper right', bbox_to_anchor=(1.28, 1.0))
 
     plt.xlabel('Vertical position (cm)')
     plt.ylabel('Horizontal position (cm)')
-    plt.xlim(-5, 150 + 30)
+    plt.xlim(-5, 155)
     plt.ylim(-2, 24)
     # plt.title('Defect Occurrences')
-    # plt.grid(True)
+    plt.grid(True)
     plt.savefig(file_path, bbox_inches='tight')
     plt.close()
 
@@ -259,11 +258,6 @@ def main():
     conveyor_speed = 60
     model_file = 'models/yolov8s-cls_tilda400_50ep/yolov8s-cls_tilda400_50ep.pt'
     rollmap_image_path = 'rollmap_plot.png'
-    images = [
-        Image.open(f"./images/027.jpg").resize((750, 128)),
-        Image.open(f"./images/003.jpg").resize((750, 128)),
-        Image.open(f"./images/372.jpg").resize((750, 128)),
-    ]
     index = 0
 
     # Define the layout for each camera monitor section
@@ -338,11 +332,16 @@ def main():
                 camera_thread.daemon = True
                 camera_thread.start()
         elif event == 'Reset session':
-            if sg.popup_yes_no('Are you sure you want to reset the session?\nThis will delete "defects.csv" and "rollmap_plot.png".', title='Confirm Reset') == 'Yes':
+            if sg.popup_yes_no('Are you sure you want to reset the session?\nThis will delete "defects.csv", "rollmap_plot.png"\nand detections folder contents.', title='Confirm Reset') == 'Yes':
                 if os.path.exists('defects.csv'):
                     os.remove('defects.csv')
                 if os.path.exists('rollmap_plot.png'):
                     os.remove('rollmap_plot.png')
+                if os.path.exists('detections'):
+                    for file in os.listdir('detections'):
+                        file_path = os.path.join('detections', file)
+                        if os.path.isfile(file_path):
+                            os.remove(file_path)
                 print("Session reset completed.")
         elif event == 'Settings':
             # Open the settings window when "Settings" is clicked

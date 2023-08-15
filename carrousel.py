@@ -54,7 +54,7 @@ def main():
                 elif event.key == pygame.K_r:  # 'r' key to restart the carousel
                     for i in range(len(images)):
                         image_positions[i] = (-(len(images) - i) * SCREEN_HEIGHT) + SCREEN_HEIGHT
-                    paused = False
+                    paused = False 
 
         # Update the carousel only if not paused
         if not paused:

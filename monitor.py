@@ -156,10 +156,12 @@ def process_image(file_name, model):
 
     for i in range(len(marked_coordinates)):
         x1, y1, x2, y2 = marked_coordinates[i]
-        cv2.rectangle(input_image, (x1, y1), (x2, y2), color_mapping[new_entries[i]['class']], 2)
+        cv2.rectangle(input_image, (x1, y1), (x2, y2),
+                      color_mapping[new_entries[i]['class']], 2)
 
     save_path = os.path.join('detections', file_name)
     cv2.imwrite(save_path, input_image)
+
 
 def cleanup_frames_folder():
     model = YOLO(
@@ -194,11 +196,43 @@ def cleanup_frames_folder():
             print("No files inside 'frames' folder")
 
 
+def split_list_by_limit(input_list, limit):
+    result = []
+    current_sum = 0
+    curr_limit = limit
+    sublist = []
+
+    for value in input_list:
+        if value <= curr_limit:
+            sublist.append(value)
+        else:
+            result.append(sublist)
+            sublist = [value]
+            curr_limit += limit
+
+    if sublist:
+        result.append(sublist)
+
+    return result
+
+
+def split_list_into_structure(input_list, structure):
+    result = []
+    idx = 0
+
+    for length in structure:
+        sublist = input_list[idx: idx + length]
+        result.append(sublist)
+        idx += length
+
+    return result
+
+
 def create_defect_scatter_plot(file_path):
     # Check if the 'defects.csv' file exists
     if not os.path.exists('defects.csv'):
         print("No 'defects.csv' file found.")
-        return False
+        return -1
 
     # Read data from the CSV file
     data = []
@@ -225,24 +259,39 @@ def create_defect_scatter_plot(file_path):
         y_positions.append(pos_x * 0.03)
         defect_class_color.append(classes[frame_class])
 
-    plt.figure(figsize=(6.95, 3))
-    scatter = plt.scatter(x_positions, y_positions, marker='o', color=defect_class_color)
+    # Lets say a limit of 80
+    limit = 80
+    # If any position goes over limit it breaks it down into multiple lists
+    x_positions = split_list_by_limit(x_positions, limit)
+    y_positions = split_list_into_structure(
+        y_positions, [len(sublist) for sublist in x_positions])
+    defect_class_color = split_list_into_structure(
+        defect_class_color, [len(sublist) for sublist in x_positions])
 
-     # Create a custom legend
-    legend_labels = [plt.Line2D([0], [0], marker='o', color='w', label=class_name,
-                                 markerfacecolor=class_color) for class_name, class_color in classes.items()]
-    plt.legend(handles=legend_labels, loc='upper right', bbox_to_anchor=(1.28, 1.0))
+    plot_index = -1
 
-    plt.xlabel('Vertical position (cm)')
-    plt.ylabel('Horizontal position (cm)')
-    plt.xlim(-5, 155)
-    plt.ylim(-2, 24)
-    # plt.title('Defect Occurrences')
-    plt.grid(True)
-    plt.savefig(file_path, bbox_inches='tight')
-    plt.close()
+    for info in zip(x_positions, y_positions, defect_class_color):
+        plot_index += 1
+        x, y, c = info
+        plt.figure(figsize=(6.95, 3))
+        scatter = plt.scatter(x, y, marker='o', color=c)
 
-    return True
+        # Create a custom legend
+        legend_labels = [plt.Line2D([0], [0], marker='o', color='w', label=class_name,
+                                    markerfacecolor=class_color) for class_name, class_color in classes.items()]
+
+        plt.legend(handles=legend_labels, loc='upper right',
+                   bbox_to_anchor=(1.28, 1.0))
+
+        plt.xlim(limit * plot_index - 5, limit * (plot_index + 1))
+        plt.ylim(-2, 24)
+        plt.xlabel('Vertical position (cm)')
+        plt.ylabel('Horizontal position (cm)')
+        plt.grid(True)
+        plt.savefig(f'rollmap_plot_{plot_index}.png', bbox_inches='tight')
+        plt.close()
+
+    return plot_index
 
 
 def main():
@@ -258,7 +307,7 @@ def main():
     conveyor_speed = 60
     model_file = 'models/yolov8s-cls_tilda400_50ep/yolov8s-cls_tilda400_50ep.pt'
     rollmap_image_path = 'rollmap_plot.png'
-    index = 0
+    rollmap_image_index = 0
 
     # Define the layout for each camera monitor section
     camera_layout_cam0 = [
@@ -275,8 +324,9 @@ def main():
 
     # Define the layout for each tab in the stats section
     roll_map_layout = [
-        [sg.Text('Roll Map')],
-        [sg.Image(key='-CANVAS_ROLL_MAP-', size=(750, 300), pad=10)]
+        [sg.Image(key='-CANVAS_ROLL_MAP-', size=(750, 300), pad=10, expand_y=True)],
+        [sg.Column([[sg.Button('<<', key='previous'),
+                     sg.Button('>>', key='next')]], justification='center')]
     ]
 
     summary_layout = [
@@ -306,17 +356,17 @@ def main():
             [sg.Tab('Cam_0', camera_layout_cam0)],
             # [sg.Tab('Cam_1', camera_layout_cam1)],
             # [sg.Tab('Cam_2', camera_layout_cam2)]
-        ])],
+        ], expand_x=True)],
         [sg.TabGroup([[sg.Tab('Roll Map', roll_map_layout)], [sg.Tab('Summary', summary_layout)], [
                      sg.Tab('Defects', defects_layout)]], expand_x=True, expand_y=True)],  # Adjust the width of the tabgroup
         [sg.Column(info_layout, expand_x=True, element_justification='c')]
     ]
 
     # Create the main window with size 800x600
-    main_window = sg.Window('Fabric Monitor', layout, size=(800, 600))
+    main_window = sg.Window('Fabric Monitor', layout)
 
     while True:
-        event, values = main_window.read(timeout=1000)
+        event, values = main_window.read(timeout=100)
 
         if event == sg.WIN_CLOSED:
             break
@@ -332,11 +382,13 @@ def main():
                 camera_thread.daemon = True
                 camera_thread.start()
         elif event == 'Reset session':
-            if sg.popup_yes_no('Are you sure you want to reset the session?\nThis will delete "defects.csv", "rollmap_plot.png"\nand detections folder contents.', title='Confirm Reset') == 'Yes':
+            if sg.popup_yes_no('Are you sure you want to reset the session?\nThis will delete "defects.csv", roll map graphs\nand detections folder contents.', title='Confirm Reset') == 'Yes':
                 if os.path.exists('defects.csv'):
                     os.remove('defects.csv')
-                if os.path.exists('rollmap_plot.png'):
-                    os.remove('rollmap_plot.png')
+                # Remove images starting with 'rollmap_plot_'
+                for file in os.listdir('.'):
+                    if file.startswith('rollmap_plot_') and file.endswith('.png'):
+                        os.remove(file)
                 if os.path.exists('detections'):
                     for file in os.listdir('detections'):
                         file_path = os.path.join('detections', file)
@@ -380,17 +432,20 @@ def main():
 
             settings_window.close()  # Close the settings window if the "Cancel" button is clicked
 
-        # main_window["-IMAGE_CAM_0-"].update(data = ImageTk.PhotoImage(images[index%len(images)]))
-        # main_window["-IMAGE_CAM_1-"].update(data = ImageTk.PhotoImage(images[(index+1)%len(images)]))
-        # main_window["-IMAGE_CAM_2-"].update(data = ImageTk.PhotoImage(images[(index+2)%len(images)]))
+        # Handle "next" and "previous" button clicks
+        elif event == 'next':
+            rollmap_image_index = min(rollmap_image_index + 1, last_index)
+        elif event == 'previous':
+            rollmap_image_index = max(rollmap_image_index - 1, 0)
+
         # Update the speed value text after applying the settings
         main_window['-SPEED_VALUE-'].update(conveyor_speed)
-        index = index + 1
 
         # Update the canvas element with the loaded image
-        if create_defect_scatter_plot(rollmap_image_path):
+        last_index = create_defect_scatter_plot(rollmap_image_path)
+        if last_index >= 0:
             main_window['-CANVAS_ROLL_MAP-'].update(data=ImageTk.PhotoImage(
-                Image.open(rollmap_image_path)))
+                Image.open(f'rollmap_plot_{rollmap_image_index}.png')))
         else:
             main_window['-CANVAS_ROLL_MAP-'].update(data=None)
 

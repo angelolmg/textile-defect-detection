@@ -228,7 +228,7 @@ def split_list_into_structure(input_list, structure):
     return result
 
 
-def create_defect_scatter_plot(file_path):
+def create_defect_scatter_plot():
     # Check if the 'defects.csv' file exists
     if not os.path.exists('defects.csv'):
         print("No 'defects.csv' file found.")
@@ -273,7 +273,7 @@ def create_defect_scatter_plot(file_path):
     for info in zip(x_positions, y_positions, defect_class_color):
         plot_index += 1
         x, y, c = info
-        plt.figure(figsize=(6.95, 3))
+        plt.figure(figsize=(7.3, 3.2), dpi=100)
         scatter = plt.scatter(x, y, marker='o', color=c)
 
         # Create a custom legend
@@ -293,6 +293,9 @@ def create_defect_scatter_plot(file_path):
 
     return plot_index
 
+def update_summary_data(window, defect_summary_data):
+    window['-DEFECT_SUMMARY_TABLE-'].update(values=[[key, value]
+                                            for key, value in defect_summary_data.items()])
 
 def main():
     # Start a thread to clean up the frames folder
@@ -306,12 +309,18 @@ def main():
     detection_confidence = 0.5
     conveyor_speed = 60
     model_file = 'models/yolov8s-cls_tilda400_50ep/yolov8s-cls_tilda400_50ep.pt'
-    rollmap_image_path = 'rollmap_plot.png'
     rollmap_image_index = 0
+
+    defect_summary_data = {
+    'DPS': 0,
+    'Speed (m/min)': 0,
+    'Position (m)': 0,
+    'Defect Count': 0
+}
 
     # Define the layout for each camera monitor section
     camera_layout_cam0 = [
-        [sg.Image(key='-IMAGE_CAM_0-', size=(750, 128), pad=12)],
+        [sg.Image(key='-IMAGE_CAM_0-', size=(780, 128), pad=12)],
     ]
 
     # camera_layout_cam1 = [
@@ -324,13 +333,23 @@ def main():
 
     # Define the layout for each tab in the stats section
     roll_map_layout = [
-        [sg.Image(key='-CANVAS_ROLL_MAP-', size=(750, 300), pad=10, expand_y=True)],
+        [sg.Image(key='-CANVAS_ROLL_MAP-',
+                  size=(780, 300), pad=10, expand_y=True)],
         [sg.Column([[sg.Button('<<', key='previous'),
                      sg.Button('>>', key='next')]], justification='center')]
     ]
 
     summary_layout = [
-        [sg.Text('Summary')],
+        [sg.Table(values=[[key, value] for key, value in defect_summary_data.items()],
+                  headings=['Key', 'Value'],
+                  auto_size_columns=False,
+                  display_row_numbers=False,
+                  num_rows=len(defect_summary_data)+20,
+                  col_widths=[20, 10],
+                  key='-DEFECT_SUMMARY_TABLE-',
+                  justification='left',
+                  expand_y=True)],
+        [sg.Button('Update Summary', key='-UPDATE_SUMMARY-', pad=3)]
     ]
 
     defects_layout = [
@@ -363,10 +382,11 @@ def main():
     ]
 
     # Create the main window with size 800x600
-    main_window = sg.Window('Fabric Monitor', layout)
+    main_window = sg.Window('Fabric Monitor', layout, finalize=True)
+    main_window.maximize()
 
     while True:
-        event, values = main_window.read(timeout=100)
+        event, values = main_window.read(timeout=1000)
 
         if event == sg.WIN_CLOSED:
             break
@@ -395,6 +415,12 @@ def main():
                         if os.path.isfile(file_path):
                             os.remove(file_path)
                 print("Session reset completed.")
+        elif event == '-UPDATE_SUMMARY-':
+            defect_summary_data['DPS'] = 12
+            defect_summary_data['Speed (m/min)'] = 60
+            defect_summary_data['Position (m)'] = 105
+            defect_summary_data['Defect Count'] = 256
+            update_summary_data(main_window, defect_summary_data)
         elif event == 'Settings':
             # Open the settings window when "Settings" is clicked
             settings_layout = [
@@ -442,7 +468,7 @@ def main():
         main_window['-SPEED_VALUE-'].update(conveyor_speed)
 
         # Update the canvas element with the loaded image
-        last_index = create_defect_scatter_plot(rollmap_image_path)
+        last_index = create_defect_scatter_plot()
         if last_index >= 0:
             main_window['-CANVAS_ROLL_MAP-'].update(data=ImageTk.PhotoImage(
                 Image.open(f'rollmap_plot_{rollmap_image_index}.png')))

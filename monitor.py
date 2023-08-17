@@ -333,11 +333,12 @@ def main():
 
     # Define the layout for each tab in the stats section
     roll_map_layout = [
-        [sg.Image(key='-CANVAS_ROLL_MAP-',
-                  size=(780, 300), pad=10, expand_y=True)],
-        [sg.Column([[sg.Button('<<', key='previous'),
-                     sg.Button('>>', key='next')]], justification='center')]
-    ]
+    [sg.Image(key='-CANVAS_ROLL_MAP-', size=(780, 300), pad=10, expand_y=True)],
+    [sg.Column([[sg.Button('<<', key='previous'),
+                 sg.Text('Roll Map:', pad=((20, 0), 0)),
+                 sg.Text('0/0', key='-ROLLMAP_INDEX-', pad=((0, 20), 0)),
+                 sg.Button('>>', key='next')]], justification='center')]
+]
 
     summary_layout = [
         [sg.Table(values=[[key, value] for key, value in defect_summary_data.items()],
@@ -472,8 +473,10 @@ def main():
         if last_index >= 0:
             main_window['-CANVAS_ROLL_MAP-'].update(data=ImageTk.PhotoImage(
                 Image.open(f'rollmap_plot_{rollmap_image_index}.png')))
+            main_window['-ROLLMAP_INDEX-'].update(f'{rollmap_image_index+1}/{last_index+1}')
         else:
             main_window['-CANVAS_ROLL_MAP-'].update(data=None)
+            main_window['-ROLLMAP_INDEX-'].update('0/0')
 
     main_window.close()
 

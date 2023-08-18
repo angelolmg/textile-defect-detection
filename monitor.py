@@ -1,5 +1,5 @@
 # Working on Windows 10 (WSL 1)
-# Run export DISPLAY=:0 and Xming (https://sourceforge.net/projects/xming/)
+# Run Xming (https://sourceforge.net/projects/xming/) then export DISPLAY=:0
 
 import PySimpleGUI as sg
 from PIL import Image, ImageTk
@@ -15,6 +15,8 @@ import datetime
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+from PIL import Image
+import io
 
 # Get images from feed only every FRAME_SKIP frames
 # SECONDS TO SKIP = VIDEO ORIGINAL HEIGHT / (VIDEO ORIGINAL FPS * VIDEO SPEED PER FRAME IN PIXELS)
@@ -321,6 +323,40 @@ def update_rollmap_view(window, current_rollmap, total_rollmaps):
     window['-ROLLMAP_INDEX-'].update(
         f'{current_rollmap+1}/{total_rollmaps+1}')
 
+def update_popup_with_row_info(row_data):
+     # Decode the base64-encoded image data to bytes
+    img_bytes = base64.b64decode(row_data["img_base64"])
+
+    # Create a PIL image from the bytes
+    img_pil = Image.open(io.BytesIO(img_bytes))
+
+    # Resize the PIL image to 256x256
+    img_pil_resized = img_pil.resize((128, 128))
+    
+    # Save the resized PIL image to a file
+    img_pil_resized.save("defect.png")
+    
+    popup_layout = [
+        [sg.Text('Defect Details', font=('Any', 14, 'bold'))],
+        [sg.Text(f'Frame Position: {row_data["frame_pos"]}')],
+        [sg.Text(f'Frame Index: {row_data["frame_index"]}')],
+        [sg.Text(f'Camera: {row_data["camera"]}')],
+        [sg.Text(f'Class: {row_data["class"]}')],
+        [sg.Text(f'Position (X, Y): ({row_data["pos_x"]}, {row_data["pos_y"]})')],
+        [sg.Text(f'Date: {row_data["date"]}')],
+        [sg.Image(filename="defect.png", key='-DEFECT_IMAGE-', size=(400, 400))],
+        [sg.Button('Close')]
+    ]
+    
+    popup_window = sg.Window('Defect Details', popup_layout, modal=True)
+    
+    while True:
+        event, values = popup_window.read()
+        if event in (sg.WINDOW_CLOSED, 'Close'):
+            break
+            
+    popup_window.close()
+
 def main():
     # Start a thread to clean up the frames folder
     cleanup_thread = threading.Thread(target=cleanup_frames_folder)
@@ -344,6 +380,8 @@ def main():
         'Position (m)': 0,
         'Defect Count': 0
     }
+
+    sg.theme('DarkTeal9') 
 
     # Define the layout for each camera monitor section
     camera_layout_cam0 = [
@@ -377,7 +415,7 @@ def main():
                   col_widths=[20, 10],
                   key='-DEFECT_SUMMARY_TABLE-',
                   justification='left',
-                  expand_y=True)]
+                  expand_y=True, expand_x=True)]
     ]
 
     # Check if the CSV file exists
@@ -515,6 +553,11 @@ def main():
                 new_table = defects_data.sort_values(
                     by=col_name, ascending=True)
                 defects_data = new_table
+            # Clicked on a row and the row is not null
+            elif event[1] == '+CLICKED+' and event[2][0] != None:
+                clicked_row_index = event[2][0]
+                clicked_row_data = defects_data.iloc[clicked_row_index].to_dict()
+                update_popup_with_row_info(clicked_row_data)
 
         # Update the speed value text after applying the settings
         main_window['-SPEED_VALUE-'].update(conveyor_speed)

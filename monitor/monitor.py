@@ -15,7 +15,7 @@ import datetime
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-from PIL import Image
+import json
 import io
 
 # Get images from feed only every FRAME_SKIP frames
@@ -23,6 +23,74 @@ import io
 # SECONDS TO SKIP = 600 / (60 * 5) = 2
 # FRAMES TO SKIP = (VIDEO ORIGINAL FPS * SECONDS TO SKIP) - 1 = (60 * 2) - 1 = 119
 FRAME_SKIP = 119
+CLOCK_SECS = 2
+ROLLMAP_XLIMIT = 80
+
+def load_config_file(file_path):
+    try:
+        with open(file_path, "r") as config_file:
+            config = json.load(config_file)
+
+        # Update settings with values from the config file
+        global patch_size, resize_size, detection_confidence, conveyor_speed, model_file, \
+        defects_data_csv_path, session_time, detections_folder, frames_folder, rollmaps_folder
+
+        patch_size = config.get("settings", {}).get("patch_size", patch_size)
+        resize_size = config.get("settings", {}).get("resize_size", resize_size)
+        detection_confidence = config.get("settings", {}).get("detection_confidence", detection_confidence)
+        conveyor_speed = config.get("settings", {}).get("conveyor_speed", conveyor_speed)
+        model_file = config.get("settings", {}).get("model_file", model_file)
+        defects_data_csv_path = config.get("settings", {}).get("defects_data_csv_path", defects_data_csv_path)
+        session_time = config.get("session_time", session_time)
+        detections_folder = config.get("detections_folder", detections_folder)
+        frames_folder = config.get("frames_folder", frames_folder)
+        rollmaps_folder = config.get("rollmaps_folder", rollmaps_folder)
+
+        return True
+
+    except Exception as e:
+        sg.popup_error(f"Error loading config file: {str(e)}")
+        return False
+
+# Function to create the session folder and its subdirectories
+def create_session_folders():
+    # Get the current date and time
+    current_time = time.strftime("%Y%m%d%H%M%S")
+    session_folder = os.path.join("monitor/sessions", current_time)
+
+    # Create the session folder
+    os.makedirs(session_folder)
+
+    # Create the 'detections' folder
+    os.makedirs(os.path.join(session_folder, "detections"))
+
+    # Create the 'frames' folder
+    os.makedirs(os.path.join(session_folder, "frames"))
+
+    # Create the 'roll maps' folder
+    os.makedirs(os.path.join(session_folder, "rollmaps"))
+
+    # Create a configuration file (config.json)
+    config = {
+        "session_time": current_time,
+        "detections_folder": os.path.join(session_folder, "detections"),
+        "frames_folder": os.path.join(session_folder, "frames"),
+        "rollmaps_folder": os.path.join(rollmaps_folder, "rollmaps"),        
+        "settings": {
+            "patch_size": 64,
+            "resize_size": 512,
+            "detection_confidence": 0.5,
+            "conveyor_speed": 60,
+            "model_file": "",
+            "defects_data_csv_path": session_folder + "/defects.csv"
+        }
+    }
+
+    with open(os.path.join(session_folder, "config.json"), "w") as config_file:
+        json.dump(config, config_file)
+
+    return session_folder
+
 
 def save_entries_to_csv(csv_file, entries):
     # Check if CSV file already exists
@@ -53,7 +121,7 @@ def process_and_save_frame(frame, frame_count):
 
     # Normalize it to train size then save to disk for inference
     normalized_frame = cv2.resize(gray_frame, (768, 512))
-    save_path = os.path.join('frames', f'cam0_{frame_count}.jpg')
+    save_path = os.path.join(frames_folder, f'cam0_{frame_count}.jpg')
     cv2.imwrite(save_path, normalized_frame)
 
 
@@ -63,8 +131,8 @@ def update_camera_image(main_window, video_file):
     frame_count = 0
 
     # Create the 'frames' folder if it doesn't exist
-    if not os.path.exists('frames'):
-        os.makedirs('frames')
+    if not os.path.exists(frames_folder):
+        os.makedirs(frames_folder)
 
     while True:
         # Read a frame from the video
@@ -94,7 +162,7 @@ def update_camera_image(main_window, video_file):
 
 
 def process_image(file_name, model):
-    file_path = os.path.join('frames', file_name)
+    file_path = os.path.join(frames_folder, file_name)
     input_image = cv2.imread(file_path)
     cell_size = 64
     rows, cols, _ = input_image.shape
@@ -128,7 +196,6 @@ def process_image(file_name, model):
 
     # Save defect images to dictionary
     classes = ['good', 'hole', 'objects', 'oil spot', 'thread error']
-    csv_file = 'defects.csv'
     new_entries = []
 
     for i in range(len(marked_images)):
@@ -146,7 +213,7 @@ def process_image(file_name, model):
                             'date': datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
                             'img_base64': base64_image})
 
-    save_entries_to_csv(csv_file, new_entries)
+    save_entries_to_csv(defects_data_csv_path, new_entries)
 
     color_mapping = {
         'good': (0, 255, 255),
@@ -166,36 +233,41 @@ def process_image(file_name, model):
 
 
 def cleanup_frames_folder():
-    model = YOLO(
-        "models/multiclass/yolov8s-cls_tilda400_50ep/weights/best.pt")
-    print(model.names)
-
-    frames_folder = 'frames'
-
-    # Create the 'frames' folder if it doesn't exist
-    if not os.path.exists('frames'):
-        os.makedirs('frames')
-
-    # Create the 'detections' folder if it doesn't exist
-    if not os.path.exists('detections'):
-        os.makedirs('detections')
 
     while True:
-        time.sleep(1)
-        files = os.listdir(frames_folder)
-        if len(files) > 0:
-            print(f"{len(files)} files inside 'frames' folder")
+        time.sleep(CLOCK_SECS)
+        if not os.path.exists(frames_folder):
+            print(f"[cleanup_frames_folder] '{frames_folder}' folder does not exist.")
+            continue
+        
+        if not os.path.exists(model_file):
+            print(f"[cleanup_frames_folder] Model file '{model_file}' does not exist.")
+            continue
+        break
 
-            # Process one image from the frames folder
-            oldest_file = min(files, key=lambda f: os.path.getctime(
-                os.path.join(frames_folder, f)))
-            print(f"Processing: {oldest_file}")
-            process_image(oldest_file, model)
+    model = YOLO(model_file)
+    print(model.names)
 
-            os.remove(os.path.join(frames_folder, oldest_file))
-            print(f"Deleted: {oldest_file}")
-        else:
-            print("No files inside 'frames' folder")
+    while True:
+        time.sleep(CLOCK_SECS) 
+        try:
+            files = os.listdir(frames_folder)
+            if len(files) > 0:
+                print(f"{len(files)} files inside '{frames_folder}' folder")
+
+                # Process one image from the frames folder
+                oldest_file = min(files, key=lambda f: os.path.getctime(
+                    os.path.join(frames_folder, f)))
+                print(f"Processing: {oldest_file}")
+                process_image(oldest_file, model)
+
+                os.remove(os.path.join(frames_folder, oldest_file))
+                print(f"Deleted: {oldest_file}")
+            else:
+                print(f"No files inside '{frames_folder}' folder")
+
+        except Exception as e:
+            print(f"Error while processing frames: {str(e)}")
 
 
 def split_list_by_limit(input_list, limit):
@@ -230,10 +302,10 @@ def split_list_into_structure(input_list, structure):
     return result
 
 
-def create_defect_scatter_plot(defects_data_csv_path):
+def create_defect_scatter_plot():
     # Check if the 'defects.csv' file exists
     if not os.path.exists(defects_data_csv_path):
-        print(f"No {defects_data_csv_path} file found.")
+        print(f"[create_defect_scatter_plot] No {defects_data_csv_path} file found.")
         return -1
 
     # Read data from the CSV file using pandas
@@ -257,10 +329,10 @@ def create_defect_scatter_plot(defects_data_csv_path):
         y_positions.append(pos_x * 0.03)
         defect_class_color.append(classes[frame_class])
 
-    # Lets say a limit of 80
-    limit = 80
     # If any position goes over limit it breaks it down into multiple lists
-    x_positions = split_list_by_limit(x_positions, limit)
+    x_positions = split_list_by_limit(x_positions, ROLLMAP_XLIMIT)
+
+    # Match the same broken down structure of x_position to the others
     y_positions = split_list_into_structure(
         y_positions, [len(sublist) for sublist in x_positions])
     defect_class_color = split_list_into_structure(
@@ -281,12 +353,13 @@ def create_defect_scatter_plot(defects_data_csv_path):
         plt.legend(handles=legend_labels, loc='upper right',
                    bbox_to_anchor=(1.28, 1.0))
 
-        plt.xlim(limit * plot_index - 5, limit * (plot_index + 1))
+        plt.xlim(ROLLMAP_XLIMIT * plot_index - 5, ROLLMAP_XLIMIT * (plot_index + 1))
         plt.ylim(-2, 24)
         plt.xlabel('Vertical position (cm)')
         plt.ylabel('Horizontal position (cm)')
         plt.grid(True)
-        plt.savefig(f'rollmap_plot_{plot_index}.png', bbox_inches='tight')
+        save_path = os.path.join(rollmaps_folder, f'rollmap_plot_{plot_index}.png')
+        plt.savefig(save_path, bbox_inches='tight')
         plt.close()
 
     return plot_index
@@ -307,24 +380,26 @@ def sort_table(table, sort_column_index):
         sorted_table = table
     return sorted_table
 
-def resfresh_defect_table(defects_data_csv_path, fallback):
+
+def resfresh_defect_table(defect_csv, fallback):
     # Check if the CSV file exists
-    if os.path.exists(defects_data_csv_path):
-        defects_data = pd.read_csv(defects_data_csv_path)
-    else: 
+    if os.path.exists(defect_csv):
+        defects_data = pd.read_csv(defect_csv)
+    else:
         defects_data = fallback
+        print(f"Defects CSV '{defect_csv}' does not exist.")
 
     return defects_data
-    
+
 
 def update_rollmap_view(window, current_rollmap, total_rollmaps):
-    window['-CANVAS_ROLL_MAP-'].update(data=ImageTk.PhotoImage(
-                Image.open(f'rollmap_plot_{current_rollmap}.png')))
-    window['-ROLLMAP_INDEX-'].update(
-        f'{current_rollmap+1}/{total_rollmaps+1}')
+    rollmap_path = os.path.join(rollmaps_folder, f'rollmap_plot_{current_rollmap}.png')
+    window['-CANVAS_ROLL_MAP-'].update(data=ImageTk.PhotoImage(Image.open(rollmap_path)))
+    window['-ROLLMAP_INDEX-'].update(f'{current_rollmap+1}/{total_rollmaps+1}')
+
 
 def update_popup_with_row_info(row_data):
-     # Decode the base64-encoded image data to bytes
+    # Decode the base64-encoded image data to bytes
     img_bytes = base64.b64decode(row_data["img_base64"])
 
     # Create a PIL image from the bytes
@@ -332,32 +407,38 @@ def update_popup_with_row_info(row_data):
 
     # Resize the PIL image to 256x256
     img_pil_resized = img_pil.resize((128, 128))
-    
+
     # Save the resized PIL image to a file
-    img_pil_resized.save("defect.png")
-    
+    save_path = os.path.join("monitor/sessions", session_time, "defect.png")
+    img_pil_resized.save(save_path)
+
     popup_layout = [
         [sg.Text('Defect Details', font=('Any', 14, 'bold'))],
         [sg.Text(f'Frame Position: {row_data["frame_pos"]}')],
         [sg.Text(f'Frame Index: {row_data["frame_index"]}')],
         [sg.Text(f'Camera: {row_data["camera"]}')],
         [sg.Text(f'Class: {row_data["class"]}')],
-        [sg.Text(f'Position (X, Y): ({row_data["pos_x"]}, {row_data["pos_y"]})')],
+        [sg.Text(
+            f'Position (X, Y): ({row_data["pos_x"]}, {row_data["pos_y"]})')],
         [sg.Text(f'Date: {row_data["date"]}')],
         [sg.Image(filename="defect.png", key='-DEFECT_IMAGE-', size=(400, 400))],
         [sg.Button('Close')]
     ]
-    
+
     popup_window = sg.Window('Defect Details', popup_layout, modal=True)
-    
+
     while True:
         event, values = popup_window.read()
         if event in (sg.WINDOW_CLOSED, 'Close'):
             break
-            
+
     popup_window.close()
 
+
 def main():
+    global patch_size, resize_size, detection_confidence, conveyor_speed, model_file, \
+        defects_data_csv_path, session_time, detections_folder, frames_folder, rollmaps_folder
+
     # Start a thread to clean up the frames folder
     cleanup_thread = threading.Thread(target=cleanup_frames_folder)
     cleanup_thread.daemon = True
@@ -367,12 +448,16 @@ def main():
     patch_size = 64
     resize_size = 512
     detection_confidence = 0.5
-    conveyor_speed = 60
-    model_file = 'models/yolov8s-cls_tilda400_50ep/yolov8s-cls_tilda400_50ep.pt'
+    conveyor_speed = 1
+    model_file = ""
+    defects_data_csv_path = ""
+    session_time = ""
+    detections_folder = ""
+    frames_folder = ""
+
     rollmap_image_index = 0
-    defects_data_csv_path = 'defects.csv'
     empty_df = pd.DataFrame(columns=['frame_pos', 'frame_index', 'camera', 'class',
-                                    'pos_x', 'pos_y', 'date', 'img_base64'])
+                                     'pos_x', 'pos_y', 'date', 'img_base64'])
 
     defect_summary_data = {
         'DPS': 0,
@@ -381,7 +466,7 @@ def main():
         'Defect Count': 0
     }
 
-    sg.theme('DarkTeal9') 
+    sg.theme('DarkTeal9')
 
     # Define the layout for each camera monitor section
     camera_layout_cam0 = [
@@ -426,7 +511,8 @@ def main():
         defects_data = pd.read_csv(defects_data_csv_path)
 
     defects_layout = [
-        [sg.Table(values=defects_data.iloc[:, :-1].values.tolist(), headings=defects_data.columns.tolist()[:-1],
+        [sg.Table(values=defects_data.iloc[:, :-1].values.tolist(),
+                  headings=defects_data.columns.tolist()[:-1],
                   auto_size_columns=True,
                   display_row_numbers=False,
                   justification='left',
@@ -436,7 +522,7 @@ def main():
                   expand_x=True,
                   expand_y=True,
                   enable_click_events=True)],
-                  [sg.Button('Refresh', key='-REFRESH_DEFECT_DATA-')],
+        [sg.Button('Refresh', key='-REFRESH_DEFECT_DATA-')],
     ]
 
     # Define the layout for the dynamic information display section
@@ -468,13 +554,17 @@ def main():
     main_window = sg.Window('Fabric Monitor', layout)
 
     while True:
-        event, values = main_window.read(timeout=1000)
+        event, values = main_window.read(timeout=CLOCK_SECS*1000)
 
         if event == sg.WIN_CLOSED:
             break
         elif event == 'Exit' and sg.popup_yes_no('Are you sure you want to exit?', title='Confirm Exit') == 'Yes':
             break
         elif event == 'Load feed':
+            # Create a new session folder with subdirectories
+            session_folder = create_session_folders()
+            load_config_file(os.path.join(session_folder, "config.json"))
+
             # Add functionality to load a video file here
             video_file = sg.popup_get_file('Select a video file to load')
             if video_file:
@@ -483,6 +573,12 @@ def main():
                     target=update_camera_image, args=(main_window, video_file))
                 camera_thread.daemon = True
                 camera_thread.start()
+        elif event == 'Open session':
+            config_file_path = sg.popup_get_file(
+                'Select a configuration JSON file to open')
+            if config_file_path:
+                if load_config_file(config_file_path):
+                    sg.popup(f"Configuration loaded successfully from {config_file_path}")
         elif event == 'Reset session':
             if sg.popup_yes_no('Are you sure you want to reset the session?\nThis will delete "defects.csv", roll map graphs\nand detections folder contents.', title='Confirm Reset') == 'Yes':
                 if os.path.exists(defects_data_csv_path):
@@ -498,7 +594,7 @@ def main():
                             os.remove(file_path)
                 defects_data = resfresh_defect_table(defects_data_csv_path, empty_df)
                 print("Session reset completed.")
-            
+
         elif event == 'Settings':
             # Open the settings window when "Settings" is clicked
             settings_layout = [
@@ -556,16 +652,17 @@ def main():
             # Clicked on a row and the row is not null
             elif event[1] == '+CLICKED+' and event[2][0] != None:
                 clicked_row_index = event[2][0]
-                clicked_row_data = defects_data.iloc[clicked_row_index].to_dict()
+                clicked_row_data = defects_data.iloc[clicked_row_index].to_dict(
+                )
                 update_popup_with_row_info(clicked_row_data)
 
         # Update the speed value text after applying the settings
         main_window['-SPEED_VALUE-'].update(conveyor_speed)
         main_window['-DEFECTS_TABLE-'].update(
-                    values=defects_data.iloc[:, :-1].values.tolist())
+            values=defects_data.iloc[:, :-1].values.tolist())
 
         # Update the canvas element with the loaded image
-        last_index = create_defect_scatter_plot(defects_data_csv_path)
+        last_index = create_defect_scatter_plot()
         if last_index >= 0:
             update_rollmap_view(main_window, rollmap_image_index, last_index)
             defect_summary_data['Speed (m/min)'] = 60
@@ -574,7 +671,6 @@ def main():
             rollmap_image_index = 0
             main_window['-CANVAS_ROLL_MAP-'].update(data=None)
             main_window['-ROLLMAP_INDEX-'].update('0/0')
-            
 
     main_window.close()
 

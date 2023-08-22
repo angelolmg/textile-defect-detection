@@ -31,6 +31,19 @@ ROLLMAP_XLIMIT = 80
 CAM_FRAME_HEIGHT_PX = 512
 CAM_FRAME_HEIGHT_CM = 15
 
+# ANSI escape codes for text formatting
+RESET = "\033[0m"
+BOLD = "\033[1m"
+UNDERLINE = "\033[4m"
+
+# ANSI escape codes for text colors
+RED = "\033[31m"
+GREEN = "\033[32m"
+YELLOW = "\033[33m"
+BLUE = "\033[34m"
+MAGENTA = "\033[35m"
+CYAN = "\033[36m"
+WHITE = "\033[37m"
 
 def load_config_file(file_path):
     try:
@@ -151,11 +164,14 @@ def update_camera_image(main_window, video_file):
         # Read a frame from the video
         ret, frame = cap.read()
         if not ret:
-            # Process and save frame then update the image in the main window
-            process_and_save_frame(last_frame, frame_count)
-            main_window['-IMAGE_CAM_0-'].update(
-                data=ImageTk.PhotoImage(Image.fromarray(cv2.resize(last_frame, (890, 128)))))
+            if not paused: 
+             # Process and save last frame then update the image in the main window
+                process_and_save_frame(last_frame, frame_count)
+                main_window['-IMAGE_CAM_0-'].update(
+                    data=ImageTk.PhotoImage(Image.fromarray(cv2.resize(last_frame, (890, 128)))))
 
+            else: print(RED + "[update_camera_image]" + RESET + " Currently paused. Resume to start collecting data.")
+           
             # Break the loop if the video ends
             break
 
@@ -165,7 +181,9 @@ def update_camera_image(main_window, video_file):
         # Every FRAME_SKIP frames
         # Process and save frame then update the image in the main window
         if frame_count == 1 or frame_count % FRAME_SKIP == 0:
-            process_and_save_frame(frame, frame_count)
+            if not paused: process_and_save_frame(frame, frame_count)
+            else: print(RED + "[update_camera_image]" + RESET + " Currently paused. Resume to start collecting data.")
+
 
         main_window['-IMAGE_CAM_0-'].update(data=ImageTk.PhotoImage(
             Image.fromarray(cv2.resize(frame, (890, 128)))))
@@ -191,11 +209,11 @@ def process_image(file_name, model):
             images.append(image)
             image_coordinates.append((x, y, x+cell_size, y+cell_size))
 
-    print(f'Number of patches: {len(images)}')
+    print(GREEN + "[process_image]" + RESET + f' Number of patches: {len(images)}')
 
     # Defect inference
     results = model.predict(source=images, conf=0.25)
-    print(results[0].probs)
+
     # Filter defects
     marked_images = []
     top1 = []
@@ -206,8 +224,8 @@ def process_image(file_name, model):
             marked_images.append(images[i])
             marked_coordinates.append(image_coordinates[i])
 
-    print(f'Number of patches with defect: {len(marked_images)}')
-    print(f'Ratio defect/good: {len(marked_images)/len(images)*100}%')
+    print(GREEN +"[process_image]" + RESET + f' Number of patches with defect: {len(marked_images)}')
+    print(GREEN +"[process_image]" + RESET + f' Ratio defect/good: {len(marked_images)/len(images)*100}%')
     defect_summary_data['Defect Count'] += len(marked_images)
 
     # Save defect images to dictionary
@@ -256,12 +274,12 @@ def cleanup_frames_folder():
             time.sleep(CLOCK_SECS)
             if not os.path.exists(frames_folder):
                 print(
-                    f"[cleanup_frames_folder] '{frames_folder}' folder does not exist.")
+                    BLUE + "[cleanup_frames_folder]" + RESET + f" '{frames_folder}' folder does not exist.")
                 continue
 
             if not os.path.exists(model_file):
                 print(
-                    f"[cleanup_frames_folder] Model file '{model_file}' does not exist.")
+                    BLUE + "[cleanup_frames_folder]" + RESET + f" Model file '{model_file}' does not exist.")
                 continue
             break
 
@@ -273,21 +291,21 @@ def cleanup_frames_folder():
             try:
                 files = os.listdir(frames_folder)
                 if len(files) > 0:
-                    print(f"{len(files)} files inside '{frames_folder}' folder")
+                    print(BLUE + "[cleanup_frames_folder]" + RESET + f" {len(files)} files inside '{frames_folder}' folder")
 
                     # Process one image from the frames folder
                     oldest_file = min(files, key=lambda f: os.path.getctime(
                         os.path.join(frames_folder, f)))
-                    print(f"Processing: {oldest_file}")
+                    print(f"[cleanup_frames_folder] Processing: {oldest_file}")
                     process_image(oldest_file, model)
 
                     os.remove(os.path.join(frames_folder, oldest_file))
-                    print(f"Deleted: {oldest_file}")
+                    print(BLUE + "[cleanup_frames_folder]" + RESET +  f" Deleted: {oldest_file}")
                 else:
-                    print(f"No files inside '{frames_folder}' folder")
+                    print(BLUE + "[cleanup_frames_folder]" + RESET +  f" No files inside '{frames_folder}' folder")
 
             except Exception as e:
-                print(f"Error while processing frames: {str(e)}")
+                print(BLUE + "[cleanup_frames_folder]" + RESET +  f" Error while processing frames: {str(e)}")
                 break
 
 
@@ -328,7 +346,7 @@ def create_defect_scatter_plot():
     # Check if the 'defects.csv' file exists
     if not os.path.exists(defects_data_csv_path):
         print(
-            f"[create_defect_scatter_plot] No {defects_data_csv_path} file found.")
+            YELLOW + "[create_defect_scatter_plot]" + RESET + f" No {defects_data_csv_path} file found.")
         return -1
 
     # Read data from the CSV file using pandas
@@ -480,7 +498,7 @@ def update_popup_with_row_info(row_data):
 def load_default_settings():
     global patch_size, resize_size, detection_confidence, model_file, \
         defects_data_csv_path, session_date, detections_folder, frames_folder, rollmaps_folder, \
-        start_session_time, end_session_time, defect_summary_data
+        paused, start_session_time, end_session_time, defect_summary_data
 
     # Settings
     patch_size = 64
@@ -494,6 +512,7 @@ def load_default_settings():
     rollmaps_folder = ""
 
     # General info about session
+    paused = False
     start_session_time = 0
     end_session_time = 0
     defect_summary_data = {
@@ -510,7 +529,7 @@ def main():
 
     global patch_size, resize_size, detection_confidence, model_file, \
         defects_data_csv_path, session_date, detections_folder, frames_folder, rollmaps_folder, \
-        start_session_time, end_session_time, defect_summary_data
+        paused, start_session_time, end_session_time, defect_summary_data
 
     # Start a thread to clean up the frames folder
     cleanup_thread = threading.Thread(target=cleanup_frames_folder)
@@ -569,7 +588,7 @@ def main():
     defects_layout = [
         [sg.Table(values=defects_data.iloc[:, :-1].values.tolist(),
                   headings=defects_data.columns.tolist()[:-1],
-                  auto_size_columns=True,
+                  auto_size_columns=False,
                   display_row_numbers=False,
                   justification='left',
                   num_rows=min(20, len(defects_data)),
@@ -625,19 +644,23 @@ def main():
                 sg.popup_yes_no('Are you sure you want to exit?', title='Confirm Exit') == 'Yes':
             break
         elif event == 'New session':
-            # Create a new session folder with subdirectories
-            session_folder = create_session_folders()
-            load_config_file(os.path.join(session_folder, "config.json"))
-            update_summary_data(main_window)
-
             # Add functionality to load a video file here
-            video_file = sg.popup_get_file('Select a video file to load')
+            video_file = sg.popup_get_file('Select a video file to load', file_types=(("MP4 Files", "*.mp4"), ("MOV Files", "*.mov")))
             if video_file:
-                # Create a separate thread for updating the camera image with video frames
-                camera_thread = threading.Thread(
-                    target=update_camera_image, args=(main_window, video_file))
-                camera_thread.daemon = True
-                camera_thread.start()
+                if video_file.lower().endswith((".mp4", ".mov")):
+                    # Create a new session folder with subdirectories
+                    session_folder = create_session_folders()
+                    load_config_file(os.path.join(session_folder, "config.json"))
+                    update_summary_data(main_window)
+
+                    # Create a separate thread for updating the camera image with video frames
+                    camera_thread = threading.Thread(
+                        target=update_camera_image, args=(main_window, video_file))
+                    camera_thread.daemon = True
+                    camera_thread.start()
+                else:
+                    sg.popup_error("Invalid File", "Please select a .mp4 or .mov video file.")
+
         elif event == 'Open session':
             config_file_path = sg.popup_get_file(
                 'Select a configuration JSON file to open', initial_folder="monitor/sessions")
@@ -712,7 +735,9 @@ def main():
             defects_data = resfresh_defect_table(
                 defects_data_csv_path, empty_df)
         elif event == '-START_BUTTON-':
-            main_window.Maximize()
+            paused = False
+        elif event == '-PAUSE_BUTTON-':
+            paused = True 
 
 
         # TABLE CLICKED Event has value in format ('-TABLE=', '+CLICKED+', (row,col))

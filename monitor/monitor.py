@@ -52,7 +52,8 @@ def load_config_file(file_path):
 
         # Update settings with values from the config file
         global patch_size, resize_size, detection_confidence, model_file, \
-            defects_data_csv_path, session_date, detections_folder, frames_folder, rollmaps_folder
+            defects_data_csv_path, session_date, detections_folder, frames_folder, \
+            rollmaps_folder, start_session_time
 
         patch_size = config.get("settings", {}).get("patch_size", patch_size)
         resize_size = config.get("settings", {}).get(
@@ -66,6 +67,8 @@ def load_config_file(file_path):
         detections_folder = config.get("detections_folder", detections_folder)
         frames_folder = config.get("frames_folder", frames_folder)
         rollmaps_folder = config.get("rollmaps_folder", rollmaps_folder)
+
+        start_session_time = time.time()
 
         return True
 
@@ -150,11 +153,9 @@ def process_and_save_frame(frame, frame_count):
 
 
 def update_camera_image(main_window, video_file):
-    global start_session_time
     # Open the video file
     cap = cv2.VideoCapture(video_file)
     frame_count = 0
-    start_session_time = time.time()
 
     # Create the 'frames' folder if it doesn't exist
     if not os.path.exists(frames_folder):
@@ -164,14 +165,16 @@ def update_camera_image(main_window, video_file):
         # Read a frame from the video
         ret, frame = cap.read()
         if not ret:
-            if not paused: 
+            if not paused:
              # Process and save last frame then update the image in the main window
                 process_and_save_frame(last_frame, frame_count)
                 main_window['-IMAGE_CAM_0-'].update(
                     data=ImageTk.PhotoImage(Image.fromarray(cv2.resize(last_frame, (890, 128)))))
 
-            else: print(RED + "[update_camera_image]" + RESET + " Currently paused. Resume to start collecting data.")
-           
+            else:
+                print(RED + "[update_camera_image]" + RESET +
+                      " Currently paused. Resume to start collecting data.")
+
             # Break the loop if the video ends
             break
 
@@ -181,9 +184,11 @@ def update_camera_image(main_window, video_file):
         # Every FRAME_SKIP frames
         # Process and save frame then update the image in the main window
         if frame_count == 1 or frame_count % FRAME_SKIP == 0:
-            if not paused: process_and_save_frame(frame, frame_count)
-            else: print(RED + "[update_camera_image]" + RESET + " Currently paused. Resume to start collecting data.")
-
+            if not paused:
+                process_and_save_frame(frame, frame_count)
+            else:
+                print(RED + "[update_camera_image]" + RESET +
+                      " Currently paused. Resume to start collecting data.")
 
         main_window['-IMAGE_CAM_0-'].update(data=ImageTk.PhotoImage(
             Image.fromarray(cv2.resize(frame, (890, 128)))))
@@ -209,7 +214,8 @@ def process_image(file_name, model):
             images.append(image)
             image_coordinates.append((x, y, x+cell_size, y+cell_size))
 
-    print(GREEN + "[process_image]" + RESET + f' Number of patches: {len(images)}')
+    print(GREEN + "[process_image]" + RESET +
+          f' Number of patches: {len(images)}')
 
     # Defect inference
     results = model.predict(source=images, conf=0.25)
@@ -224,8 +230,10 @@ def process_image(file_name, model):
             marked_images.append(images[i])
             marked_coordinates.append(image_coordinates[i])
 
-    print(GREEN +"[process_image]" + RESET + f' Number of patches with defect: {len(marked_images)}')
-    print(GREEN +"[process_image]" + RESET + f' Ratio defect/good: {len(marked_images)/len(images)*100}%')
+    print(GREEN + "[process_image]" + RESET +
+          f' Number of patches with defect: {len(marked_images)}')
+    print(GREEN + "[process_image]" + RESET +
+          f' Ratio defect/good: {len(marked_images)/len(images)*100}%')
     defect_summary_data['Defect Count'] += len(marked_images)
 
     # Save defect images to dictionary
@@ -291,7 +299,8 @@ def cleanup_frames_folder():
             try:
                 files = os.listdir(frames_folder)
                 if len(files) > 0:
-                    print(BLUE + "[cleanup_frames_folder]" + RESET + f" {len(files)} files inside '{frames_folder}' folder")
+                    print(BLUE + "[cleanup_frames_folder]" + RESET +
+                          f" {len(files)} files inside '{frames_folder}' folder")
 
                     # Process one image from the frames folder
                     oldest_file = min(files, key=lambda f: os.path.getctime(
@@ -300,12 +309,15 @@ def cleanup_frames_folder():
                     process_image(oldest_file, model)
 
                     os.remove(os.path.join(frames_folder, oldest_file))
-                    print(BLUE + "[cleanup_frames_folder]" + RESET +  f" Deleted: {oldest_file}")
+                    print(BLUE + "[cleanup_frames_folder]" +
+                          RESET + f" Deleted: {oldest_file}")
                 else:
-                    print(BLUE + "[cleanup_frames_folder]" + RESET +  f" No files inside '{frames_folder}' folder")
+                    print(BLUE + "[cleanup_frames_folder]" + RESET +
+                          f" No files inside '{frames_folder}' folder")
 
             except Exception as e:
-                print(BLUE + "[cleanup_frames_folder]" + RESET +  f" Error while processing frames: {str(e)}")
+                print(BLUE + "[cleanup_frames_folder]" + RESET +
+                      f" Error while processing frames: {str(e)}")
                 break
 
 
@@ -552,10 +564,6 @@ def main():
         [sg.Image(key='-IMAGE_CAM_1-', size=(750, 128), pad=12)],
     ]
 
-    # camera_layout_cam2 = [
-    #     [sg.Image(key='-IMAGE_CAM_2-', size=(750, 128), pad=12)],
-    # ]
-
     # Define the layout for each tab in the stats section
     roll_map_layout = [
         [sg.Image(key='-CANVAS_ROLL_MAP-',
@@ -624,10 +632,10 @@ def main():
     layout = [
         [sg.Menu([['&File', ['&New session', '&Open session',
                              '&Delete session', '---', '&Settings', 'E&xit']]])],
+        [sg.Text('Session: None', font=('Any', 10), key="-SESSION-STATUS-")],
         [sg.TabGroup([
             [sg.Tab('Cam_0', camera_layout_cam0)],
-            [sg.Tab('Cam_1', camera_layout_cam1)],
-            # [sg.Tab('Cam_2', camera_layout_cam2)]
+            [sg.Tab('Cam_1', camera_layout_cam1)]
         ], expand_x=True)],
         [sg.TabGroup([[sg.Tab('Roll Map', roll_map_layout)], [sg.Tab('Summary', summary_layout)], [
                      sg.Tab('Defects', defects_layout)]], expand_x=True, expand_y=True)],
@@ -645,12 +653,14 @@ def main():
             break
         elif event == 'New session':
             # Add functionality to load a video file here
-            video_file = sg.popup_get_file('Select a video file to load', file_types=(("MP4 Files", "*.mp4"), ("MOV Files", "*.mov")))
+            video_file = sg.popup_get_file('Select a video file to load', file_types=(
+                ("MP4 Files", "*.mp4"), ("MOV Files", "*.mov")))
             if video_file:
                 if video_file.lower().endswith((".mp4", ".mov")):
                     # Create a new session folder with subdirectories
                     session_folder = create_session_folders()
-                    load_config_file(os.path.join(session_folder, "config.json"))
+                    load_config_file(os.path.join(
+                        session_folder, "config.json"))
                     update_summary_data(main_window)
 
                     # Create a separate thread for updating the camera image with video frames
@@ -659,7 +669,8 @@ def main():
                     camera_thread.daemon = True
                     camera_thread.start()
                 else:
-                    sg.popup_error("Invalid File", "Please select a .mp4 or .mov video file.")
+                    sg.popup_error(
+                        "Invalid File", "Please select a .mp4 or .mov video file.")
 
         elif event == 'Open session':
             config_file_path = sg.popup_get_file(
@@ -737,8 +748,7 @@ def main():
         elif event == '-START_BUTTON-':
             paused = False
         elif event == '-PAUSE_BUTTON-':
-            paused = True 
-
+            paused = True
 
         # TABLE CLICKED Event has value in format ('-TABLE=', '+CLICKED+', (row,col))
         elif isinstance(event, tuple) and event[0] == '-DEFECTS_TABLE-':
@@ -756,11 +766,10 @@ def main():
                 )
                 update_popup_with_row_info(clicked_row_data)
 
-        # Update the speed value text after applying the settings
-        main_window['-SPEED_VALUE-'].update(
-            defect_summary_data['Speed (m/min)'])
         main_window['-DEFECTS_TABLE-'].update(
             values=defects_data.iloc[:, :-1].values.tolist())
+        main_window['-SESSION-STATUS-'].update(
+            'Session: ' + session_date if session_date else 'Session: None')
 
         # Update the canvas element with the loaded image
         last_index = create_defect_scatter_plot()

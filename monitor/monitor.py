@@ -45,19 +45,18 @@ MAGENTA = "\033[35m"
 CYAN = "\033[36m"
 WHITE = "\033[37m"
 
+
 def load_config_file(file_path):
     try:
         with open(file_path, "r") as config_file:
             config = json.load(config_file)
 
         # Update settings with values from the config file
-        global patch_size, resize_size, detection_confidence, model_file, \
+        global patch_size, detection_confidence, model_file, \
             defects_data_csv_path, session_date, detections_folder, frames_folder, \
             rollmaps_folder, start_session_time
 
         patch_size = config.get("settings", {}).get("patch_size", patch_size)
-        resize_size = config.get("settings", {}).get(
-            "resize_size", resize_size)
         detection_confidence = config.get("settings", {}).get(
             "detection_confidence", detection_confidence)
         model_file = config.get("settings", {}).get("model_file", model_file)
@@ -79,7 +78,7 @@ def load_config_file(file_path):
 # Function to create the session folder and its subdirectories
 
 
-def create_session_folders():
+def create_session_folders(settings=None):
     # Get the current date and time
     current_time = time.strftime("%Y%m%d%H%M%S")
     session_folder = os.path.join("monitor/sessions", current_time)
@@ -102,14 +101,17 @@ def create_session_folders():
         "detections_folder": os.path.join(session_folder, "detections"),
         "frames_folder": os.path.join(session_folder, "frames"),
         "rollmaps_folder": os.path.join(session_folder, "rollmaps"),
-        "settings": {
-            "patch_size": 64,
-            "resize_size": 512,
-            "detection_confidence": 0.5,
-            "model_file": "monitor/models/multiclass/yolov8s-cls_tilda400_50ep/weights/best.pt",
-            "defects_data_csv_path": session_folder + "/defects.csv"
-        }
     }
+
+    if not settings:
+        settings = {
+            "patch_size": 64,
+            "detection_confidence": 0.99,
+            "model_file": "",
+        }
+
+    settings["defects_data_csv_path"] = session_folder + "/defects.csv"
+    config["settings"] = settings
 
     with open(os.path.join(session_folder, "config.json"), "w") as config_file:
         json.dump(config, config_file)
@@ -202,17 +204,16 @@ def process_image(file_name, model):
 
     file_path = os.path.join(frames_folder, file_name)
     input_image = cv2.imread(file_path)
-    cell_size = 64
     rows, cols, _ = input_image.shape
     images = []
     image_coordinates = []
 
     # Cutout fabric patches
-    for y in range(0, rows, cell_size):
-        for x in range(0, cols, cell_size):
-            image = input_image[y:y+cell_size, x:x+cell_size]
+    for y in range(0, rows, patch_size):
+        for x in range(0, cols, patch_size):
+            image = input_image[y:y+patch_size, x:x+patch_size]
             images.append(image)
-            image_coordinates.append((x, y, x+cell_size, y+cell_size))
+            image_coordinates.append((x, y, x+patch_size, y+patch_size))
 
     print(GREEN + "[process_image]" + RESET +
           f' Number of patches: {len(images)}')
@@ -225,7 +226,7 @@ def process_image(file_name, model):
     top1 = []
     marked_coordinates = []
     for i in range(len(images)):
-        if results[i].probs.top1 != 0 and results[i].probs.top1conf > 0.99:
+        if results[i].probs.top1 != 0 and results[i].probs.top1conf > detection_confidence:
             top1.append(int(results[i].probs.top1))
             marked_images.append(images[i])
             marked_coordinates.append(image_coordinates[i])
@@ -323,7 +324,6 @@ def cleanup_frames_folder():
 
 def split_list_by_limit(input_list, limit):
     result = []
-    current_sum = 0
     curr_limit = limit
     sublist = []
 
@@ -508,14 +508,13 @@ def update_popup_with_row_info(row_data):
 
 
 def load_default_settings():
-    global patch_size, resize_size, detection_confidence, model_file, \
+    global patch_size, detection_confidence, model_file, \
         defects_data_csv_path, session_date, detections_folder, frames_folder, rollmaps_folder, \
         paused, start_session_time, end_session_time, defect_summary_data
 
     # Settings
     patch_size = 64
-    resize_size = 512
-    detection_confidence = 0.5
+    detection_confidence = 0.99
     model_file = ""
     defects_data_csv_path = ""
     session_date = ""
@@ -539,7 +538,7 @@ def load_default_settings():
 def main():
     sg.theme('DarkTeal9')
 
-    global patch_size, resize_size, detection_confidence, model_file, \
+    global patch_size, detection_confidence, model_file, \
         defects_data_csv_path, session_date, detections_folder, frames_folder, rollmaps_folder, \
         paused, start_session_time, end_session_time, defect_summary_data
 
@@ -652,25 +651,65 @@ def main():
                 sg.popup_yes_no('Are you sure you want to exit?', title='Confirm Exit') == 'Yes':
             break
         elif event == 'New session':
-            # Add functionality to load a video file here
-            video_file = sg.popup_get_file('Select a video file to load', file_types=(
-                ("MP4 Files", "*.mp4"), ("MOV Files", "*.mov")))
-            if video_file:
-                if video_file.lower().endswith((".mp4", ".mov")):
-                    # Create a new session folder with subdirectories
-                    session_folder = create_session_folders()
-                    load_config_file(os.path.join(
-                        session_folder, "config.json"))
-                    update_summary_data(main_window)
+            # Open a new session window for the user to input settings
+            session_layout = [
+                [sg.Text('New Session', font=('Helvetica', 16))],
+                [sg.Text('Patch Size', tooltip='Patch size should be a multiple of 512'),
+                 sg.Slider(range=(16, 128), default_value=patch_size, resolution=16, orientation='h', key='-PATCH_SIZE-', expand_x=True)],
+                [sg.Text('Detection Confidence'), sg.Slider(range=(0, 1), default_value=detection_confidence,
+                                                            resolution=0.01, orientation='h', key='-DETECTION_CONFIDENCE-', expand_x=True)],
+                [sg.Text('Model File')],
+                [sg.InputText(key='-MODEL_FILE-'),
+                 sg.FileBrowse(file_types=(("PyTorch Models", "*.pt"),))],
+                [sg.Text('Video File')],
+                [sg.InputText(key='-VIDEO_FILE-'), sg.FileBrowse(
+                    file_types=(("MP4 Files", "*.mp4"), ("MOV Files", "*.mov")))],
+                [sg.Button('Create Session', size=(20, 1)),
+                 sg.Button('Cancel', size=(20, 1))]
+            ]
 
-                    # Create a separate thread for updating the camera image with video frames
-                    camera_thread = threading.Thread(
-                        target=update_camera_image, args=(main_window, video_file))
-                    camera_thread.daemon = True
-                    camera_thread.start()
-                else:
-                    sg.popup_error(
-                        "Invalid File", "Please select a .mp4 or .mov video file.")
+            session_window = sg.Window('New Session', session_layout)
+
+            while True:
+                event, values = session_window.read()
+
+                if event == sg.WIN_CLOSED or event == 'Cancel':
+                    break
+                elif event == 'Create Session':
+                    # Get the updated session settings values
+                    settings = {}
+                    settings["patch_size"] = int(values['-PATCH_SIZE-'])
+                    settings["detection_confidence"] = float(
+                        values['-DETECTION_CONFIDENCE-'])
+                    settings["model_file"] = values['-MODEL_FILE-']
+                    settings["video_file"] = values['-VIDEO_FILE-']
+
+                    # Check if all session settings are provided and valid
+                    if all(value != '' for value in settings.values()):
+                        # Check if the selected video file has a valid extension
+                        video_file = settings["video_file"]
+                        if video_file.lower().endswith((".mp4", ".mov")):
+                            # Create a new session folder with subdirectories using the settings
+                            session_folder = create_session_folders(settings)
+                            load_config_file(os.path.join(
+                                session_folder, "config.json"))
+                            update_summary_data(main_window)
+
+                            # Start a separate thread for updating the camera image with video frames
+                            camera_thread = threading.Thread(
+                                target=update_camera_image, args=(main_window, video_file))
+                            camera_thread.daemon = True
+                            camera_thread.start()
+                            session_window.close()
+                            break
+                        else:
+                            sg.popup_error(
+                                "Invalid Video File", "Please select a .mp4 or .mov video file.")
+                    else:
+                        sg.popup_error(
+                            "Incomplete Session Settings", "Please provide all session settings before creating a new session.")
+
+            session_window.close()  # Close the session window if the "Cancel" button is clicked
 
         elif event == 'Open session':
             config_file_path = sg.popup_get_file(
@@ -709,8 +748,6 @@ def main():
                 [sg.Text('Settings')],
                 [sg.Text('Patch size'), sg.Slider(range=(
                     16, 128), default_value=patch_size, resolution=16, orientation='h', key='-PATCH_SIZE-')],
-                [sg.Text('Resize size'), sg.Slider(range=(
-                    256, 1024), default_value=resize_size, resolution=64, orientation='h', key='-RESIZE_SIZE-')],
                 [sg.Text('Detection confidence'), sg.Slider(range=(0, 1), default_value=detection_confidence,
                                                             resolution=0.01, orientation='h', key='-DETECTION_CONFIDENCE-')],
                 [sg.Text('Model File'), sg.InputText(
@@ -728,7 +765,6 @@ def main():
                 elif event == 'Apply':
                     # Get the updated settings values
                     patch_size = int(values['-PATCH_SIZE-'])
-                    resize_size = int(values['-RESIZE_SIZE-'])
                     detection_confidence = float(
                         values['-DETECTION_CONFIDENCE-'])
                     model_file = values['-MODEL_FILE-']
